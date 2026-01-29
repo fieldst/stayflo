@@ -1,0 +1,57 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+
+type Item = { href: string; label: string; title?: string };
+
+export default function AdminMoreMenu({
+  items,
+  pillClass,
+}: {
+  items: Item[];
+  pillClass: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={pillClass}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More"
+      >
+        More ▾
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 mt-2 w-44 overflow-hidden rounded-2xl border border-white/10 bg-black/90 shadow-2xl backdrop-blur">
+          {items.map((it) => (
+            <Link
+              key={it.href}
+              href={it.href}
+              title={it.title || it.label}
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2 text-sm text-white/80 hover:bg-white/10 hover:text-white"
+            >
+              {it.label}
+            </Link>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
