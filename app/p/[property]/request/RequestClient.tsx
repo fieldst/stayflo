@@ -39,12 +39,26 @@ function labelForUpgradeKey(upgrades: Upgrade[], key: string) {
   return upgrades.find((u) => u.upgrade_key === key)?.title ?? "Request";
 }
 
-export default function RequestPage() {
+export default function RequestClient() {
   const params = useParams();
   const sp = useSearchParams();
 
   const propertySlug = String(params.property || "");
-  const cfg = getPropertyConfig(propertySlug);
+const cfgMaybe = getPropertyConfig(propertySlug);
+
+if (!cfgMaybe) {
+  return (
+    <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <div className="text-white/70">Unknown property.</div>
+    </div>
+  );
+}
+
+const cfg = cfgMaybe; // ✅ now TypeScript knows cfg is NEVER null
+
+
+const property = cfg; // ✅ add this
+
 
 
   // `type` is now dynamic: it equals `upgrade_key`
@@ -116,33 +130,46 @@ export default function RequestPage() {
     return e;
   }, [name, phoneOrEmail, hasType, type, upgrades.length, selected]);
 
-  if (!cfg) {
-    return (
-      <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-        <h1 className="text-xl font-semibold">Property not found</h1>
-        <p className="mt-2 text-sm text-white/70">Go back and try a valid property.</p>
-        <div className="mt-4">
-          <Button href="/p/lamar">Go to Lamar</Button>
-        </div>
-      </div>
-    );
-  }
+  
 
-  function submit() {
-    if (errors.length) return;
+  async function submit() {
+  if (errors.length) return;
 
-    trackEvent(cfg.slug, "upsell_request_submit", {
-      type, // upgrade_key
-      title: selected?.title ?? undefined,
-      name: name.trim(),
-      contact: phoneOrEmail.trim(),
-      arrivalDate,
-      desiredTime,
-      hasDetails: Boolean(details.trim()),
+  trackEvent(cfg.slug, "upsell_request_submit", {
+    type, // upgrade_key
+    title: selected?.title ?? undefined,
+    name: name.trim(),
+    contact: phoneOrEmail.trim(),
+    arrivalDate,
+    desiredTime,
+    hasDetails: Boolean(details.trim()),
+  });
+
+  // ✅ Fire SMS to host (does not block guest success)
+  try {
+    await fetch("/api/public/upgrade-request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        property: cfg.slug,
+        propertyName: cfg.name || "",
+        city: cfg.city || "",
+        upgrade_key: type,
+        upgrade_title: selected?.title || "",
+        guest_name: name.trim(),
+        contact: phoneOrEmail.trim(),
+        arrivalDate,
+        desiredTime,
+        details: details.trim(),
+      }),
     });
-
-    setSubmitted(true);
+  } catch (e) {
+    // Do not break guest flow if SMS fails
+    console.warn("SMS notify failed:", e);
   }
+
+  setSubmitted(true);
+}
 
   // ✅ Submitted state
   if (submitted) {

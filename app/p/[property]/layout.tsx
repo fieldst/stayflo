@@ -14,7 +14,7 @@ type LayoutProps = {
 const ADMIN_COOKIE = "stayflo_admin";
 
 export default async function PropertyLayout({ children, params }: LayoutProps) {
-  const resolvedParams = await params; // ✅ Next expects params as a Promise
+  const resolvedParams = await params;
   const slug = String(resolvedParams?.property || "");
 
   const cfg = getPropertyConfig(slug);
@@ -22,17 +22,14 @@ export default async function PropertyLayout({ children, params }: LayoutProps) 
 
   const homeHref = slug ? `/p/${slug}` : "/p/lamar";
 
-  // ✅ If logged in, do NOT show Host Login button
-  const jar = cookies(); // ✅ no await
+  const jar = await cookies();
   const val = jar.get(ADMIN_COOKIE)?.value;
   const isAuthed = val === "1" || val === "true";
 
   return (
     <div className="min-h-screen bg-black text-white">
-      {/* 🔐 Admin-only top bar */}
       <AdminBarGate />
 
-      {/* Sticky global header */}
       <div className="sticky top-0 z-30 border-b border-white/10 bg-black/60 backdrop-blur">
         <div className="mx-auto w-full max-w-lg px-5 py-4">
           <div className="flex items-center justify-between gap-3">
@@ -55,7 +52,6 @@ export default async function PropertyLayout({ children, params }: LayoutProps) 
             )}
 
             <div className="shrink-0 flex items-center gap-3">
-              {/* Home — primary */}
               <Link
                 href={homeHref}
                 className="
@@ -73,7 +69,6 @@ export default async function PropertyLayout({ children, params }: LayoutProps) 
                 Home
               </Link>
 
-              {/* Host Login — only if NOT authed */}
               {!isAuthed ? (
                 <Link
                   href="/host"

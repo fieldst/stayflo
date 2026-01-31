@@ -3,20 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
-type Item = {
+type MenuItem = {
   label: string;
   title?: string;
   href?: string;
   onClick?: () => void;
 };
 
-export default function AdminMoreMenu({
-  items,
-  pillClass,
-}: {
-  items: Item[];
+type AdminMoreMenuProps = {
+  items: MenuItem[];
   pillClass: string;
-}) {
+};
+
+export default function AdminMoreMenu({ items, pillClass }: AdminMoreMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -44,8 +43,8 @@ export default function AdminMoreMenu({
 
       {open ? (
         <div className="absolute right-0 mt-2 w-44 overflow-hidden rounded-2xl border border-white/10 bg-black/90 shadow-2xl backdrop-blur">
-          {items.map((it) => {
-            const key = it.href ? `href:${it.href}` : `btn:${it.label}`;
+          {items.map((it, idx) => {
+            const key = it.href ? `href:${it.href}` : `btn:${it.label}:${idx}`;
 
             if (it.onClick) {
               return (

@@ -11,25 +11,25 @@ function normalizeProperty(p: unknown) {
   return s === "lamar" || s === "gabriel" ? s : "lamar";
 }
 
-export default async function HostHome({
-  searchParams,
-}: {
-  searchParams?: Record<string, string | string[] | undefined>;
-}) {
+type PageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function HostHome({ searchParams }: PageProps) {
   const jar = await cookies();
   const val = jar.get(COOKIE)?.value;
   const isAuthed = val === "1" || val === "true";
 
-  const activeProperty = normalizeProperty(searchParams?.property);
-  const next = typeof searchParams?.next === "string" && searchParams.next.startsWith("/")
-    ? searchParams.next
+  const resolvedParams = searchParams ? await searchParams : {};
+  const activeProperty = normalizeProperty(resolvedParams?.property);
+  const next = typeof resolvedParams?.next === "string" && resolvedParams.next.startsWith("/")
+    ? resolvedParams.next
     : `/host?property=${encodeURIComponent(activeProperty)}`;
 
   if (!isAuthed) {
     return <HostLoginForm propertySlug={activeProperty} nextUrl={next} />;
   }
 
-  // Logged-in Host Portal home
   return (
     <div className="mx-auto w-full max-w-lg">
       <div className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl">

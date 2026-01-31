@@ -65,7 +65,7 @@ function slugifyKey(input: string) {
   return s || "upgrade";
 }
 
-export default function HostUpgradesPage() {
+export default function UpgradesClient() {
   const sp = useSearchParams();
   const activeProperty = String(sp.get("property") || "lamar");
 

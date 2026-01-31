@@ -8,7 +8,7 @@ import * as Property from "@/lib/property";
 type WifiRow = {
   id: string;
   scope_type: string; // "property"
-  scope_key: string;  // "lamar" | "gabriel"
+  scope_key: string; // "lamar" | "gabriel"
   ssid: string;
   password: string;
   notes: any;
@@ -59,7 +59,7 @@ function textToNotes(text: string): string[] {
     .filter(Boolean);
 }
 
-export default function HostWifiPage() {
+export default function WifiClient() {
   const sp = useSearchParams();
   const activeProperty = String(sp.get("property") || "lamar");
 
@@ -166,7 +166,6 @@ export default function HostWifiPage() {
             </Button>
             <Button href="/host/guides">Guides</Button>
             <Button href="/host/upgrades">Upgrades</Button>
-            
           </div>
 
           {pageErr ? <div className="mt-3 text-sm text-red-200">{pageErr}</div> : null}
@@ -214,7 +213,9 @@ export default function HostWifiPage() {
                           onChange={(e) => setDrafts((p) => ({ ...p, [slug]: { ...d, notesText: e.target.value } }))}
                           rows={5}
                           className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none"
-                          placeholder={"If the TV won’t connect: Settings → Network → Wi-Fi\nUnplug router for 30 seconds if slow"}
+                          placeholder={
+                            "If the TV won’t connect: Settings → Network → Wi-Fi\nUnplug router for 30 seconds if slow"
+                          }
                         />
                       </label>
 
@@ -227,12 +228,7 @@ export default function HostWifiPage() {
                         <span className="text-sm">Enabled (visible to guests)</span>
                       </label>
 
-                      <Button
-                        variant="primary"
-                        className="w-full"
-                        disabled={saving}
-                        onClick={() => save(slug)}
-                      >
+                      <Button variant="primary" className="w-full" disabled={saving} onClick={() => save(slug)}>
                         {saving ? "Saving…" : "Save Wi-Fi"}
                       </Button>
                     </div>

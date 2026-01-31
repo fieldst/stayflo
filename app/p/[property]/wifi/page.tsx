@@ -2,19 +2,19 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import WifiClient from "./wifi-client";
 
-export default async function WifiPage({
-  params,
-}: {
-  // Next/Turbopack may provide params as a Promise
-  params: { property?: string } | Promise<{ property?: string }>;
-}) {
-  const resolved = await params; // <-- this is the fix
+type PageProps = {
+  params: Promise<{ property?: string }>;
+};
+
+export default async function WifiPage({ params }: PageProps) {
+  const resolved = await params;
   const property = (resolved?.property || "").toLowerCase().trim();
 
   if (!property) return notFound();
 
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
   const res = await fetch(
-    `${process.env.NEXT_PUBLIC_BASE_URL}/api/public/wifi?property=${property}`,
+    `${baseUrl}/api/public/wifi?property=${property}`,
     { cache: "no-store" }
   );
 

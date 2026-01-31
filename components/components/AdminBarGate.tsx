@@ -8,8 +8,8 @@ import AdminBar from "@/components/AdminBar";
 
 const COOKIE = "stayflo_admin";
 
-export default function AdminBarGate() {
-  const jar = cookies();
+export default async function AdminBarGate() {
+  const jar = await cookies();
   const isAuthed = jar.get(COOKIE)?.value === "1";
   if (!isAuthed) return null;
   return <AdminBar />;

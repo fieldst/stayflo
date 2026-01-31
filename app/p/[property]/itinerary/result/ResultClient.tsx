@@ -10,7 +10,7 @@ function pretty(label: string) {
   return label.replaceAll("_", " ");
 }
 
-export default function ItineraryResult() {
+export default function ResultClient() {
   const params = useParams();
   const propertySlug = String(params.property || "");
   const cfg = getPropertyConfig(propertySlug);

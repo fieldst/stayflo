@@ -1,28 +1,30 @@
+import type React from "react";
 import Link from "next/link";
 import clsx from "clsx";
 
 type ButtonVariant = "primary" | "secondary" | "purple" | "request";
 
-type ButtonProps = {
+// Extend native <button> props so callers can use standard attributes
+// like disabled, type, aria-*, etc.
+type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   href?: string;
-  onClick?: () => void;
-  children: React.ReactNode;
   variant?: ButtonVariant;
-  className?: string;
 };
 
 export function Button({
   href,
-  onClick,
   children,
   variant = "secondary",
   className,
+  disabled = false,
+  type = "button",
+  ...rest
 }: ButtonProps) {
   const base =
     "inline-flex items-center justify-center gap-2 select-none " +
     "rounded-2xl px-4 py-3 text-sm font-semibold " +
     "transition-all duration-150 focus:outline-none " +
-    "active:scale-[0.97]";
+    "active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none";
 
   const variants: Record<ButtonVariant, string> = {
     // Existing behavior preserved
@@ -48,7 +50,7 @@ export function Button({
 
   const classes = clsx(base, variants[variant], className);
 
-  if (href) {
+  if (href && !disabled) {
     return (
       <Link href={href} className={classes}>
         {children}
@@ -57,7 +59,7 @@ export function Button({
   }
 
   return (
-    <button onClick={onClick} className={classes} type="button">
+    <button className={classes} type={type} disabled={disabled} {...rest}>
       {children}
     </button>
   );
