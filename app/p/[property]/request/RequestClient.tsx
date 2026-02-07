@@ -19,19 +19,27 @@ type Upgrade = {
   price_text: string | null;
   lead_time_hours: number | null;
   sort_order: number;
-  fields: any[];
+  fields: unknown[];
 };
 
 async function fetchJSON<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   const text = await res.text();
-  let data: any = {};
+  let data: unknown = {};
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
     data = { raw: text };
   }
-  if (!res.ok) throw new Error(data?.error || data?.message || data?.raw || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const d = data as Record<string, unknown>;
+    const msg =
+      (typeof d?.error === "string" && d.error) ||
+      (typeof d?.message === "string" && d.message) ||
+      (typeof d?.raw === "string" && d.raw) ||
+      `Request failed (${res.status})`;
+    throw new Error(msg);
+  }
   return data as T;
 }
 
@@ -44,24 +52,19 @@ export default function RequestClient() {
   const sp = useSearchParams();
 
   const propertySlug = String(params.property || "");
-const cfgMaybe = getPropertyConfig(propertySlug);
+  const cfgMaybe = getPropertyConfig(propertySlug);
 
-if (!cfgMaybe) {
-  return (
-    <div className="min-h-screen bg-black text-white flex items-center justify-center">
-      <div className="text-white/70">Unknown property.</div>
-    </div>
-  );
-}
+  if (!cfgMaybe) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-white/70">Unknown property.</div>
+      </div>
+    );
+  }
 
-const cfg = cfgMaybe; // ✅ now TypeScript knows cfg is NEVER null
+  const cfg = cfgMaybe;
 
-
-const property = cfg; // ✅ add this
-
-
-
-  // `type` is now dynamic: it equals `upgrade_key`
+  // `type` is dynamic: it equals `upgrade_key`
   const rawType = sp.get("type");
   const hasType = Boolean(rawType && rawType.trim().length > 0);
 
@@ -69,42 +72,44 @@ const property = cfg; // ✅ add this
   const [loadingUpgrades, setLoadingUpgrades] = useState(true);
   const [upgradesError, setUpgradesError] = useState<string | null>(null);
 
-  // selected upgrade_key (dynamic)
+  // selected upgrade_key
   const [type, setType] = useState<string>(rawType || "");
 
+  // Guest info
   const [name, setName] = useState("");
-  const [phoneOrEmail, setPhoneOrEmail] = useState("");
+  const [guestEmail, setGuestEmail] = useState("");
+  const [guestPhone, setGuestPhone] = useState("");
+
   const [arrivalDate, setArrivalDate] = useState("");
   const [desiredTime, setDesiredTime] = useState("");
   const [details, setDetails] = useState("");
   const [submitted, setSubmitted] = useState(false);
 
-  // Load upgrades for this property (city + property rules handled server-side)
+  // Load upgrades (city + property rules handled server-side)
   useEffect(() => {
     let mounted = true;
 
     async function load() {
-      if (!cfg) return;
       setLoadingUpgrades(true);
       setUpgradesError(null);
       try {
-        // Expecting your server to merge city + property scope and return enabled upgrades
-        const data = await fetchJSON<{ upgrades: Upgrade[] }>(`/api/upgrades?property=${encodeURIComponent(cfg.slug)}`);
+        const data = await fetchJSON<{ upgrades: Upgrade[] }>(
+          `/api/upgrades?property=${encodeURIComponent(cfg.slug)}`
+        );
         const list = (data.upgrades || []).filter((u) => u.enabled);
         if (!mounted) return;
         setUpgrades(list);
 
-        // If deep-linked with ?type=, keep it. Otherwise default to first available upgrade.
         if (rawType && rawType.trim()) {
           setType(rawType.trim());
         } else {
           setType(list[0]?.upgrade_key || "");
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!mounted) return;
-        setUpgradesError(e.message || "Failed to load upgrades");
+        const msg = e instanceof Error ? e.message : "Failed to load upgrades";
+        setUpgradesError(msg);
         setUpgrades([]);
-        // keep whatever type was in URL; otherwise empty
         setType(rawType || "");
       } finally {
         if (mounted) setLoadingUpgrades(false);
@@ -115,70 +120,89 @@ const property = cfg; // ✅ add this
     return () => {
       mounted = false;
     };
-    // We intentionally key off cfg.slug and rawType
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg?.slug, rawType]);
+  }, [cfg.slug, rawType]);
 
-  const selected = useMemo(() => upgrades.find((u) => u.upgrade_key === type) ?? null, [upgrades, type]);
+  const selected = useMemo(
+    () => upgrades.find((u) => u.upgrade_key === type) ?? null,
+    [upgrades, type]
+  );
 
   const errors = useMemo(() => {
     const e: string[] = [];
     if (!name.trim()) e.push("Name is required.");
-    if (!phoneOrEmail.trim()) e.push("Phone or email is required.");
+    if (!guestEmail.trim()) e.push("Email is required.");
+    if (!guestPhone.trim()) e.push("Phone number is required.");
     if (hasType && !type) e.push("Upgrade type is required.");
     if (hasType && upgrades.length && !selected) e.push("That upgrade is not available.");
     return e;
-  }, [name, phoneOrEmail, hasType, type, upgrades.length, selected]);
-
-  
+  }, [name, guestEmail, guestPhone, hasType, type, upgrades.length, selected]);
 
   async function submit() {
-  if (errors.length) return;
+    if (errors.length) return;
 
-  trackEvent(cfg.slug, "upsell_request_submit", {
-    type, // upgrade_key
-    title: selected?.title ?? undefined,
-    name: name.trim(),
-    contact: phoneOrEmail.trim(),
-    arrivalDate,
-    desiredTime,
-    hasDetails: Boolean(details.trim()),
-  });
-
-  // ✅ Fire SMS to host (does not block guest success)
-  try {
-    await fetch("/api/public/upgrade-request", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        property: cfg.slug,
-        propertyName: cfg.name || "",
-        city: cfg.city || "",
-        upgrade_key: type,
-        upgrade_title: selected?.title || "",
-        guest_name: name.trim(),
-        contact: phoneOrEmail.trim(),
-        arrivalDate,
-        desiredTime,
-        details: details.trim(),
-      }),
+    trackEvent(cfg.slug, "upsell_request_submit", {
+      type, // upgrade_key
+      title: selected?.title ?? undefined,
+      name: name.trim(),
+      guestEmail: guestEmail.trim(),
+      guestPhone: guestPhone.trim(),
+      arrivalDate,
+      desiredTime,
+      hasDetails: Boolean(details.trim()),
     });
-  } catch (e) {
-    // Do not break guest flow if SMS fails
-    console.warn("SMS notify failed:", e);
+
+    // Notify host (email route). Do not block guest success if notify fails.
+    try {
+      await fetch("/api/public/upgrade-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          property: cfg.slug,
+          propertyName: cfg.name || "",
+          city: cfg.city || "",
+          upgrade_key: type,
+          upgrade_title: selected?.title || "",
+
+          // IMPORTANT: send these fields (backend will use them)
+          guest_name: name.trim(),
+          guest_email: guestEmail.trim(),
+          guest_phone: guestPhone.trim(),
+
+          // keep legacy field for backward compatibility
+          contact: guestEmail.trim() || guestPhone.trim(),
+
+          arrivalDate,
+          desiredTime,
+          details: details.trim(),
+        }),
+      });
+    } catch (e) {
+      console.warn("Host notify failed:", e);
+    }
+
+    setSubmitted(true);
   }
 
-  setSubmitted(true);
-}
-
-  // ✅ Submitted state
+  // Submitted state (updated copy)
   if (submitted) {
     return (
       <div className="space-y-6">
         <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-sm p-6">
           <div className="text-xs uppercase tracking-wide text-white/60">{cfg.city}</div>
           <h1 className="mt-1 text-2xl font-bold">Request received ✅</h1>
-          <p className="mt-2 text-sm text-white/70">Thanks! We’ll confirm availability and next steps as soon as possible.</p>
+
+          <p className="mt-2 text-sm text-white/70">
+            Thanks! If approved, we’ll send the request directly through Airbnb so everything stays official and secure.
+          </p>
+
+          <p className="mt-2 text-sm text-white/70">
+            If you have any questions, email us at{" "}
+            <a className="underline" href="mailto:info@fieldsofcomfortstays.com">
+              info@fieldsofcomfortstays.com
+            </a>
+            .
+          </p>
 
           <div className="mt-5 grid grid-cols-2 gap-3">
             <Button href={`/p/${cfg.slug}`} className="w-full">
@@ -195,17 +219,19 @@ const property = cfg; // ✅ add this
           <div className="mt-4 space-y-2 text-sm">
             <div className="flex justify-between gap-3">
               <span className="text-white/60">Request</span>
-              <span className="font-semibold">
-                {labelForUpgradeKey(upgrades, type)}
-              </span>
+              <span className="font-semibold">{labelForUpgradeKey(upgrades, type)}</span>
             </div>
             <div className="flex justify-between gap-3">
               <span className="text-white/60">Name</span>
               <span className="font-semibold">{name}</span>
             </div>
             <div className="flex justify-between gap-3">
-              <span className="text-white/60">Contact</span>
-              <span className="font-semibold">{phoneOrEmail}</span>
+              <span className="text-white/60">Email</span>
+              <span className="font-semibold">{guestEmail}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-white/60">Phone</span>
+              <span className="font-semibold">{guestPhone}</span>
             </div>
             {arrivalDate ? (
               <div className="flex justify-between gap-3">
@@ -225,7 +251,7 @@ const property = cfg; // ✅ add this
     );
   }
 
-  // ✅ HUB MODE: /request (no type) = list of upgrades
+  // HUB MODE: /request (no type)
   if (!hasType) {
     return (
       <div className="space-y-6">
@@ -239,124 +265,81 @@ const property = cfg; // ✅ add this
                 Optional upgrades — submit a request and we’ll confirm availability. (Request-based, no purchase required.)
               </p>
             </div>
-            <Button href={`/p/${cfg.slug}`} className="shrink-0">
-              Home
+            <Button href={`/p/${cfg.slug}`} variant="secondary">
+              Back
             </Button>
           </div>
         </div>
 
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-lg font-semibold">Choose an upgrade</h2>
-            {loadingUpgrades ? (
-              <span className="text-xs text-white/60">Loading…</span>
-            ) : null}
-          </div>
-
-          {upgradesError ? (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm">
-              <div className="font-semibold text-white/90">Couldn’t load upgrades</div>
-              <div className="mt-1 text-white/70">{upgradesError}</div>
-              <div className="mt-3">
-                <Button href={`/p/${cfg.slug}`} className="w-full">
-                  Back to Home
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          {!upgradesError ? (
-            <div className="mt-4 space-y-3">
+          {loadingUpgrades ? (
+            <div className="text-sm text-white/70">Loading upgrades…</div>
+          ) : upgradesError ? (
+            <div className="text-sm text-red-300">{upgradesError}</div>
+          ) : upgrades.length ? (
+            <div className="space-y-3">
               {upgrades.map((u) => (
-                <div key={u.id} className="rounded-3xl border border-white/10 bg-black/20 p-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="font-semibold">
-                        {u.emoji} {u.title}
-                      </div>
-                      <div className="mt-1 text-sm text-white/70">{u.subtitle}</div>
-                      {u.price_text ? (
-                        <div className="mt-2 text-xs text-white/60">Est. price: {u.price_text}</div>
-                      ) : null}
-                    </div>
-
-                    <Button href={`/p/${cfg.slug}/request?type=${encodeURIComponent(u.upgrade_key)}`} className="shrink-0">
-                      Request →
-                    </Button>
-                  </div>
-                </div>
+                <Button
+                  key={u.id}
+                  href={`/p/${cfg.slug}/request?type=${encodeURIComponent(u.upgrade_key)}`}
+                  className="w-full justify-between"
+                  variant="secondary"
+                >
+                  <span>
+                    {u.emoji} {u.title}
+                  </span>
+                  <span className="text-white/60">Request</span>
+                </Button>
               ))}
-
-              {!loadingUpgrades && upgrades.length === 0 ? (
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/70">
-                  No upgrades are currently available.
-                </div>
-              ) : null}
             </div>
-          ) : null}
-
-          <p className="mt-4 text-xs text-white/60">We’ll confirm availability through the Airbnb message thread.</p>
+          ) : (
+            <div className="text-sm text-white/70">No upgrades available right now.</div>
+          )}
         </div>
       </div>
     );
   }
 
-  // ✅ FORM MODE: /request?type=...
+  // FORM MODE: /request?type=upgrade_key
   return (
     <div className="space-y-6">
-      {/* Header */}
+      <PropertyBadge slug={cfg.slug} />
+
       <div className="rounded-3xl border border-white/10 bg-black/40 backdrop-blur-sm p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-xs uppercase tracking-wide text-white/60">{cfg.city}</div>
-            <h1 className="mt-1 text-2xl font-bold">Request an Upgrade</h1>
+            <h1 className="mt-1 text-2xl font-bold">Request an upgrade</h1>
             <p className="mt-2 text-sm text-white/70">
-              Submit your request and we’ll confirm availability. (Request-based — no purchase required.)
+              Submit a request — we’ll confirm availability in Airbnb.
             </p>
           </div>
-
-          <div className="flex flex-col gap-2">
-            <Button href={`/p/${cfg.slug}`} className="w-full">
-              Home
-            </Button>
-            <Button href={`/p/${cfg.slug}/request`} className="w-full">
-              All upgrades
-            </Button>
-          </div>
+          <Button href={`/p/${cfg.slug}`} variant="secondary">
+            Home
+          </Button>
         </div>
       </div>
 
-      {/* Upgrade selector (dynamic) */}
       <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-semibold">Choose an upgrade</h2>
-          {loadingUpgrades ? <span className="text-xs text-white/60">Loading…</span> : null}
-        </div>
+        <h2 className="text-lg font-semibold">Choose an upgrade</h2>
 
-        {upgradesError ? (
-          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm">
-            <div className="font-semibold text-white/90">Couldn’t load upgrades</div>
-            <div className="mt-1 text-white/70">{upgradesError}</div>
-            <p className="mt-2 text-xs text-white/60">You can still submit the form, but the upgrade list may be unavailable.</p>
-          </div>
+        {loadingUpgrades ? (
+          <div className="mt-3 text-sm text-white/70">Loading upgrades…</div>
+        ) : upgradesError ? (
+          <div className="mt-3 text-sm text-red-300">{upgradesError}</div>
         ) : null}
 
-        <div className="mt-4 grid grid-cols-1 gap-3">
+        <div className="mt-4 grid gap-3">
           {upgrades.map((u) => {
-            const active = type === u.upgrade_key;
+            const active = u.upgrade_key === type;
             return (
               <button
                 key={u.id}
                 type="button"
-                onClick={() => {
-                  setType(u.upgrade_key);
-                  trackEvent(cfg.slug, "upsell_type_select", { type: u.upgrade_key, title: u.title });
-                }}
-                className={[
-                  "w-full rounded-3xl border px-5 py-4 text-left transition-all duration-150",
-                  "active:scale-[0.98]",
-                  active ? "border-white/25 bg-white/15" : "border-white/10 bg-black/20 hover:bg-white/10 hover:border-white/20",
-                ].join(" ")}
+                onClick={() => setType(u.upgrade_key)}
+                className={`w-full text-left rounded-3xl border p-5 transition ${
+                  active ? "border-white/20 bg-white/10" : "border-white/10 bg-black/20 hover:border-white/20"
+                }`}
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -398,12 +381,24 @@ const property = cfg; // ✅ add this
         </div>
 
         <div>
-          <label className="text-sm font-semibold text-white/90">Phone or email *</label>
+          <label className="text-sm font-semibold text-white/90">Email *</label>
           <input
-            value={phoneOrEmail}
-            onChange={(e) => setPhoneOrEmail(e.target.value)}
+            value={guestEmail}
+            onChange={(e) => setGuestEmail(e.target.value)}
             className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/25"
-            placeholder="Example: (210) 555-0123 or you@email.com"
+            placeholder="you@email.com"
+            inputMode="email"
+          />
+        </div>
+
+        <div>
+          <label className="text-sm font-semibold text-white/90">Phone *</label>
+          <input
+            value={guestPhone}
+            onChange={(e) => setGuestPhone(e.target.value)}
+            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white outline-none placeholder:text-white/40 focus:border-white/25"
+            placeholder="(210) 555-0123"
+            inputMode="tel"
           />
         </div>
 
@@ -461,7 +456,13 @@ const property = cfg; // ✅ add this
           ✅ Submit Request
         </Button>
 
-        <p className="mt-3 text-xs text-white/60">We’ll confirm availability in the Airbnb message thread.</p>
+        <p className="mt-3 text-xs text-white/60">
+          If approved, we’ll send the request via Airbnb. Questions? Email{" "}
+          <a className="underline" href="mailto:info@fieldsofcomfortstays.com">
+            info@fieldsofcomfortstays.com
+          </a>
+          .
+        </p>
       </div>
     </div>
   );

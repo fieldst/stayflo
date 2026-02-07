@@ -135,13 +135,30 @@ export default function GuestGuidePage() {
             Guide found, but we couldn’t load it. Please try again.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/20">
-            <iframe
-              title="Guest guide PDF"
-              src={signedUrl}
-              className="h-[78vh] w-full"
-            />
-          </div>
+          <div
+  className="
+    relative
+    h-[80vh]
+    w-full
+    overflow-y-scroll
+    overflow-x-hidden
+    rounded-3xl
+    border border-white/10
+    bg-black/20
+  "
+  style={{ WebkitOverflowScrolling: "touch" }}
+>
+  <iframe
+    title="Guest guide PDF"
+    src={signedUrl}
+    className="absolute inset-0 h-full w-full"
+    style={{
+      border: "none",
+      touchAction: "pan-y",
+    }}
+  />
+</div>
+
         )}
       </div>
     </div>
