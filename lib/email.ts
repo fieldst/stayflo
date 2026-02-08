@@ -30,7 +30,20 @@ function getEmailConfig(): EmailConfig | null {
   const smtpPass = readEnv('SMTP_PASS');
   const smtpSecureRaw = readEnv('SMTP_SECURE');
 
-  if (!to || !from || !smtpHost || !smtpPortRaw || !smtpUser || !smtpPass) return null;
+  const missing: string[] = [];
+if (!to) missing.push('STAYFLO_HOST_EMAIL_TO');
+if (!from) missing.push('STAYFLO_EMAIL_FROM');
+if (!smtpHost) missing.push('SMTP_HOST');
+if (!smtpPortRaw) missing.push('SMTP_PORT');
+if (!smtpUser) missing.push('SMTP_USER');
+if (!smtpPass) missing.push('SMTP_PASS');
+
+if (missing.length) {
+  // eslint-disable-next-line no-console
+  console.warn('[email] missing env:', missing);
+  return null;
+}
+
 
   const smtpPort = Number(smtpPortRaw);
   if (!Number.isFinite(smtpPort) || smtpPort <= 0) return null;
@@ -59,7 +72,8 @@ export async function sendHostEmail(
   params: SendEmailParams
 ): Promise<{ sent: boolean; error?: string }> {
   const cfg = getEmailConfig();
-  if (!cfg) return { sent: false, error: 'Email not configured (missing env vars)' };
+  if (!cfg) return { sent: false, error: 'Email not configured (missing env vars) — check Vercel Production env + redeploy' };
+
 
   try {
     const transporter = getTransporter(cfg);
