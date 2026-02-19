@@ -65,6 +65,7 @@ export default function ItineraryWizard() {
   const [budget, setBudget] = useState<string>(""); // required
   const [vibes, setVibes] = useState<Vibe[]>(["Foodie", "Local Gems"]);
   const [notes, setNotes] = useState<string>("");
+  const [planDay, setPlanDay] = useState<"today" | "tomorrow">("today");
 
   const canGenerate = useMemo(
     () => Boolean(cfg && budget && vibes.length > 0),
@@ -91,6 +92,7 @@ export default function ItineraryWizard() {
     qs.set("pace", pace);
     qs.set("transport", transport);
     qs.set("budget", budget);
+    qs.set("planDay", planDay);
     qs.set("vibes", vibes.join(","));
     if (notes.trim()) qs.set("notes", notes.trim());
 
@@ -197,6 +199,28 @@ export default function ItineraryWizard() {
 
       {/* Controls */}
       <div className="rounded-3xl border border-white/10 bg-white/5 p-6 space-y-5">
+       <div className="mt-6">
+  <div className="text-sm font-medium text-white/80">Plan for</div>
+  <div className="mt-2">
+    <select
+  value={planDay}
+  onChange={(e) => setPlanDay(e.target.value as "today" | "tomorrow")}
+  className="w-full rounded-xl bg-white/5 px-4 py-3 text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-white/20"
+>
+  <option value="today" className="text-black">
+    Today (right now / tonight)
+  </option>
+  <option value="tomorrow" className="text-black">
+    Tomorrow (start in the morning)
+  </option>
+</select>
+
+    <div className="mt-2 text-xs text-white/60">
+      If it’s late, “Today” will focus on open-now night options.
+    </div>
+  </div>
+</div>
+
         <div>
           <label className="text-sm font-semibold text-white/90">⏱️ Duration</label>
           <select

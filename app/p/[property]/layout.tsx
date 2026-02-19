@@ -115,7 +115,7 @@ export default async function PropertyLayout({ children, params }: LayoutProps) 
         strokeLinecap="round"
       />
     </svg>
-    Follow Us :)
+    Follow Me :)
   </a>
 ) : null}
 

@@ -235,7 +235,7 @@ function dismissWelcome() {
                       } catch {}
                     }}
                   >
-                    📷 Follow on Instagram
+                    📷 Follow me on Instagram
                   </a>
 
                   <div className="mt-2 text-center text-xs text-white/50">Opens in a new tab</div>
@@ -367,7 +367,7 @@ function dismissWelcome() {
           </div>
 
           <p className="mt-2 text-sm text-white/70">
-            We’d love to stay connected. Follow us to see memory wall moments, behind-the-scenes creation,
+            We’d love to stay connected. Follow me to see memory wall moments, behind-the-scenes creation,
             and the future homes we’re building — all with comfort and intention.
           </p>
 
@@ -403,18 +403,19 @@ function dismissWelcome() {
 
         <div className="mt-5">
           <Button
-            variant="primary"
-            className="w-full"
-            onClick={() => {
-              trackEvent(cfg.slug, "home_plan_day_click", { coming_soon: true });
-              setShowPlanMyDaySoon(true);
-            }}
-          >
-            🧠 Plan My Day
-          </Button>
-          <div className="mt-2 text-xs text-white/60 text-center">
-            Coming soon: a personalized day plan built from your vibe, budget, and host favorites.
-          </div>
+              variant="primary"
+              className="w-full"
+              href={`/p/${cfg.slug}/itinerary`}
+              onClick={() => {
+                trackEvent(cfg.slug, "home_plan_day_click", { coming_soon: false });
+              }}
+            >
+              🧠 Plan My Day
+            </Button>
+            <div className="mt-2 text-xs text-white/60 text-center">
+              Personalized, time-blocked plan built from live Google ratings.
+        </div>
+
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3">
