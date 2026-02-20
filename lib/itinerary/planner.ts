@@ -1,5 +1,6 @@
 import type { ItineraryPrefs, ItineraryBlock, PlaceCandidate } from "./types";
 import { searchPlacesText } from "./places";
+import { distanceKm } from "./travel";
 
 const TZ = "America/Chicago";
 
@@ -14,9 +15,9 @@ type Bias = { lat: number; lng: number; radiusMeters: number; key: string };
 const BIASES: Bias[] = [
   { key: "downtown", lat: 29.4241, lng: -98.4936, radiusMeters: 50_000 },
   { key: "rim", lat: 29.6027, lng: -98.6153, radiusMeters: 35_000 }, // La Cantera / The Rim
-  { key: "stone_oak", lat: 29.6499, lng: -98.4730, radiusMeters: 35_000 },
+  { key: "stone_oak", lat: 29.6499, lng: -98.473, radiusMeters: 35_000 },
   { key: "boerne", lat: 29.7947, lng: -98.7319, radiusMeters: 35_000 },
-  { key: "new_braunfels", lat: 29.7030, lng: -98.1245, radiusMeters: 35_000 },
+  { key: "new_braunfels", lat: 29.703, lng: -98.1245, radiusMeters: 35_000 },
   { key: "schertz", lat: 29.5522, lng: -98.2697, radiusMeters: 35_000 },
 ];
 
@@ -36,19 +37,6 @@ function chicagoHour(d: Date): number {
   }).formatToParts(d);
   const hr = parts.find((p) => p.type === "hour")?.value;
   return hr ? clamp(parseInt(hr, 10), 0, 23) : 12;
-}
-
-function chicagoDateKey(d: Date): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(d);
-  const y = parts.find((p) => p.type === "year")?.value ?? "2000";
-  const m = parts.find((p) => p.type === "month")?.value ?? "01";
-  const day = parts.find((p) => p.type === "day")?.value ?? "01";
-  return `${y}-${m}-${day}`;
 }
 
 function formatTimeLabel(d: Date): string {
@@ -86,17 +74,14 @@ function normalize(s: string): string {
     .trim();
 }
 
-function wantsTonight(notes: string | undefined): boolean {
-  const n = normalize(notes || "");
-  return /\b(tonight|right now|now|late night|this evening)\b/.test(n);
-}
-
 type NoteSignals = {
   noCoffee: boolean;
   wantsBbq: boolean;
   wantsIceCream: boolean;
   kidFriendly: boolean;
   includeKeywords: string[];
+  avoidKeywords: string[];
+  areaHints: string[];
 };
 
 function extractSignals(notesRaw: string | undefined, vibes: string[]): NoteSignals {
@@ -115,6 +100,15 @@ function extractSignals(notesRaw: string | undefined, vibes: string[]): NoteSign
 
   const kidFriendly =
     /\b(kids|kid|children|family|toddler|stroller)\b/.test(notes) || /\bfamily\b/.test(vibeText);
+
+  // Detect “avoid X” constraints (negative keywords)
+  const avoidMatches = Array.from(
+    notes.matchAll(
+      /\b(?:avoid|no|skip|not into|dont want|don't want|do not want)\s+([a-z]{3,18})\b/g
+    )
+  ).map((m) => m[1]);
+
+  const avoidKeywords = Array.from(new Set(avoidMatches)).slice(0, 6);
 
   // Pull a few useful keywords from notes to steer search (no junk words)
   const stop = new Set([
@@ -160,7 +154,30 @@ function extractSignals(notesRaw: string | undefined, vibes: string[]): NoteSign
     )
   ).slice(0, 6);
 
-  return { noCoffee, wantsBbq, wantsIceCream, kidFriendly, includeKeywords };
+  // Area hints (lightweight, prevents overfitting)
+  const areaHints: string[] = [];
+  const areaMap: Array<[RegExp, string]> = [
+    [/\bpearl\b/, "Pearl"],
+    [/\bsouthtown\b/, "Southtown"],
+    [/\bking william\b/, "King William"],
+    [/\briver walk\b|\briverwalk\b/, "River Walk"],
+    [/\balamo heights\b/, "Alamo Heights"],
+    [/\bla cantera\b|\bthe rim\b/, "La Cantera"],
+  ];
+
+  for (const [re, label] of areaMap) {
+    if (re.test(notes)) areaHints.push(label);
+  }
+
+  return {
+    noCoffee,
+    wantsBbq,
+    wantsIceCream,
+    kidFriendly,
+    includeKeywords,
+    avoidKeywords,
+    areaHints: areaHints.slice(0, 3),
+  };
 }
 
 type SlotTemplate = {
@@ -211,7 +228,10 @@ function dedupeByPlaceId(items: PlaceCandidate[]): PlaceCandidate[] {
   return out;
 }
 
-function pickPrimaryAvoidingUsed(candidates: PlaceCandidate[], used: Set<string>): PlaceCandidate | null {
+function pickPrimaryAvoidingUsed(
+  candidates: PlaceCandidate[],
+  used: Set<string>
+): PlaceCandidate | null {
   for (const c of candidates) {
     if (!used.has(c.placeId)) return c;
   }
@@ -245,14 +265,18 @@ function pickBiases(prefs: ItineraryPrefs, slotId: string): Bias[] {
 
   const outskirts = BIASES.filter((b) => b.key !== "downtown");
   const rotated = rotate(outskirts, seed % outskirts.length);
-  return [BIASES[0], rotated[0]]; // downtown + 1 outskirts (keeps costs reasonable)
+  return [BIASES[0], rotated[0]]; // downtown + 1 outskirts
 }
 
 /**
  * Rotate candidate list slightly so we don’t always select the same “famous top 1”
  * for generic queries.
  */
-function varietyRotate(candidates: PlaceCandidate[], prefs: ItineraryPrefs, slotId: string): PlaceCandidate[] {
+function varietyRotate(
+  candidates: PlaceCandidate[],
+  prefs: ItineraryPrefs,
+  slotId: string
+): PlaceCandidate[] {
   const seed = hashString(
     `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(
       ","
@@ -264,38 +288,131 @@ function varietyRotate(candidates: PlaceCandidate[], prefs: ItineraryPrefs, slot
 
 function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
   const budgetHint = budgetToHint(p.budget);
-    const signals = extractSignals(p.notes, p.vibes);
+  const signals = extractSignals(p.notes, p.vibes);
   const gapMin = p.pace === "packed" ? 90 : p.pace === "chill" ? 150 : 120;
 
-  
   const baseRequireOpenNow = true;
   const hour = chicagoHour(nowUtc());
-const late = hour >= 20; // 8PM+
+  const late = hour >= 20; // 8PM+
+    // ✅ RIGHT NOW / SPONTANEOUS MODE
+  // Goal: give them something they can do immediately:
+  // - Open-now only
+  // - Short, punchy plan (2–3 stops)
+  // - Works even if it’s late
+    // ✅ RIGHT NOW / SPONTANEOUS MODE (self-contained)
+  // - Open-now only
+  // - Short, punchy plan (2–3 stops)
+  // - Doesn't depend on vars declared later in the function
+  if (p.planDay === "now") {
+    const t0 = nowUtc();
 
-// ✅ UI choice wins over notes
-const goTonight = p.planDay === "today" && late;
+    // lightweight versions of the later variables (avoid TDZ errors)
+    const budgetHintNow = budgetToHint(p.budget);
+    const signalsNow = extractSignals(p.notes, p.vibes);
 
-// ✅ If user chose tomorrow, always start tomorrow morning
-const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
+    const localFlavorNow = signalsNow.kidFriendly
+      ? "family friendly local favorite"
+      : "local favorite";
+    const hiddenGemNow = "hidden gem locals love";
+
+    const noteBoostRawNow = [...signalsNow.areaHints, ...signalsNow.includeKeywords].slice(0, 8);
+    const noteBoostNow = noteBoostRawNow.length ? `(${noteBoostRawNow.join(", ")})` : "";
+    const avoidTextNow = signalsNow.avoidKeywords.length
+      ? ` -${signalsNow.avoidKeywords.join(" -")}`
+      : "";
+
+    // keep pacing consistent with your app
+    const gapMinNow = p.pace === "packed" ? 90 : p.pace === "chill" ? 150 : 120;
+
+    const quickStartQueries = signalsNow.noCoffee
+      ? [
+          `best quick bite San Antonio open now ${budgetHintNow} ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `bakery San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `tacos San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+        ]
+      : [
+          `coffee shop San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `best cafe San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `quick bite San Antonio open now ${budgetHintNow} ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+        ];
+
+    const doSomethingQueries = signalsNow.kidFriendly
+      ? [
+          `family friendly attraction San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `kids activity San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `ice cream San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+        ]
+      : [
+          `top attraction San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `local gem San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `fun thing to do San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+        ];
+
+    const wrapUpQueries = signalsNow.wantsIceCream
+      ? [
+          `ice cream San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `dessert San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `scenic walk San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+        ]
+      : [
+          `dessert San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `scenic walk San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `chill bar San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+        ];
+
+    return [
+      {
+        id: "now_1",
+        startAt: t0,
+        title: "Do this next (open now)",
+        category: "attraction",
+        requireOpenNow: true,
+        queries: doSomethingQueries,
+      },
+      {
+        id: "now_2",
+        startAt: addMinutes(t0, gapMinNow),
+        title: "Grab something nearby (open now)",
+        category: "lunch",
+        requireOpenNow: true,
+        queries: quickStartQueries,
+      },
+      {
+        id: "now_3",
+        startAt: addMinutes(t0, gapMinNow * 2),
+        title: "One last stop (if you’re feeling it)",
+        category: "relax",
+        requireOpenNow: true,
+        queries: wrapUpQueries,
+      },
+    ];
+  }
+  // ✅ UI choice wins over notes
+  const goTonight = p.planDay === "today" && late;
+
+  // ✅ If user chose tomorrow, always start tomorrow morning
+  const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
 
   const localFlavor = signals.kidFriendly ? "family friendly local favorite" : "local favorite";
   const hiddenGem = "hidden gem locals love";
-  const noteBoost = signals.includeKeywords.length ? `(${signals.includeKeywords.join(", ")})` : "";
+
+  const noteBoostRaw = [...signals.areaHints, ...signals.includeKeywords].slice(0, 8);
+  const noteBoost = noteBoostRaw.length ? `(${noteBoostRaw.join(", ")})` : "";
+  const avoidText = signals.avoidKeywords.length ? ` -${signals.avoidKeywords.join(" -")}` : "";
 
   // NIGHT MODE
   if (goTonight) {
-
     const t0 = start;
     const dessertQueries = signals.wantsIceCream
       ? [
-          `ice cream San Antonio open late ${localFlavor} ${noteBoost}`,
-          `gelato San Antonio open late ${hiddenGem} ${noteBoost}`,
-          `late night dessert San Antonio ${hiddenGem} ${noteBoost}`,
+          `ice cream San Antonio open late ${localFlavor} ${noteBoost}${avoidText}`,
+          `gelato San Antonio open late ${hiddenGem} ${noteBoost}${avoidText}`,
+          `late night dessert San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
         ]
       : [
-          `late night dessert San Antonio ${hiddenGem} ${noteBoost}`,
-          `late night tacos San Antonio ${localFlavor} ${noteBoost}`,
-          `open late food San Antonio ${hiddenGem} ${noteBoost}`,
+          `late night dessert San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+          `late night tacos San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
+          `open late food San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
         ];
 
     return [
@@ -315,13 +432,13 @@ const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
         requireOpenNow: baseRequireOpenNow,
         queries: signals.kidFriendly
           ? [
-              `evening walk San Antonio scenic ${localFlavor} ${noteBoost}`,
-              `family friendly evening San Antonio ${hiddenGem} ${noteBoost}`,
+              `evening walk San Antonio scenic ${localFlavor} ${noteBoost}${avoidText}`,
+              `family friendly evening San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
             ]
           : [
-              `live music San Antonio tonight ${localFlavor} ${noteBoost}`,
-              `cocktail bar San Antonio open late ${hiddenGem} ${noteBoost}`,
-              `nightlife San Antonio popular ${localFlavor} ${noteBoost}`,
+              `live music San Antonio tonight ${localFlavor} ${noteBoost}${avoidText}`,
+              `cocktail bar San Antonio open late ${hiddenGem} ${noteBoost}${avoidText}`,
+              `nightlife San Antonio popular ${localFlavor} ${noteBoost}${avoidText}`,
             ],
       },
     ];
@@ -332,24 +449,24 @@ const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
 
   const morningQueries = signals.noCoffee
     ? [
-        `best breakfast San Antonio ${budgetHint} ${localFlavor} ${noteBoost}`,
-        `breakfast tacos San Antonio ${hiddenGem} ${noteBoost}`,
-        `bakery San Antonio ${hiddenGem} ${noteBoost}`,
+        `best breakfast San Antonio ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `breakfast tacos San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+        `bakery San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
       ]
     : [
-        `best breakfast San Antonio ${budgetHint} ${localFlavor} ${noteBoost}`,
-        `coffee and pastries San Antonio ${hiddenGem} ${noteBoost}`,
-        `cafe San Antonio ${localFlavor} ${noteBoost}`,
+        `best breakfast San Antonio ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `coffee and pastries San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+        `cafe San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
       ];
 
   const lunchQueries = signals.wantsBbq
     ? [
-        `best bbq San Antonio brisket ribs ${localFlavor} ${noteBoost}`,
-        `bbq near San Antonio smoked meats ${hiddenGem} ${noteBoost}`,
+        `best bbq San Antonio brisket ribs ${localFlavor} ${noteBoost}${avoidText}`,
+        `bbq near San Antonio smoked meats ${hiddenGem} ${noteBoost}${avoidText}`,
       ]
     : [
-        `best lunch San Antonio ${budgetHint} ${localFlavor} ${noteBoost}`,
-        `local lunch San Antonio ${hiddenGem} ${noteBoost}`,
+        `best lunch San Antonio ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `local lunch San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
       ];
 
   const baseHalfDay: SlotTemplate[] = [
@@ -368,9 +485,9 @@ const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
       category: "attraction",
       requireOpenNow: false,
       queries: [
-        `top attractions San Antonio ${localFlavor} ${noteBoost}`,
-        `things to do San Antonio ${hiddenGem} ${noteBoost}`,
-        `best museums San Antonio ${localFlavor} ${noteBoost}`,
+        `top attractions San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
+        `things to do San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+        `best museums San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
       ],
     },
     {
@@ -392,9 +509,9 @@ const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
       category: "shopping",
       requireOpenNow: false,
       queries: [
-        `best neighborhoods to explore San Antonio ${localFlavor} ${noteBoost}`,
-        `boutiques San Antonio ${hiddenGem} ${noteBoost}`,
-        `San Antonio market square local ${noteBoost}`,
+        `best neighborhoods to explore San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
+        `boutiques San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+        `San Antonio market square local ${noteBoost}${avoidText}`,
       ],
     },
     {
@@ -404,8 +521,8 @@ const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
       category: "dinner",
       requireOpenNow: false,
       queries: [
-        `best dinner San Antonio ${budgetHint} ${localFlavor} ${noteBoost}`,
-        `local dinner San Antonio ${hiddenGem} ${noteBoost}`,
+        `best dinner San Antonio ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `local dinner San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
       ],
     },
     {
@@ -416,12 +533,12 @@ const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
       requireOpenNow: false,
       queries: signals.kidFriendly
         ? [
-            `evening walk San Antonio scenic ${localFlavor} ${noteBoost}`,
-            `family friendly evening San Antonio ${hiddenGem} ${noteBoost}`,
+            `evening walk San Antonio scenic ${localFlavor} ${noteBoost}${avoidText}`,
+            `family friendly evening San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
           ]
         : [
-            `cocktail bars San Antonio ${hiddenGem} ${noteBoost}`,
-            `live music San Antonio ${localFlavor} ${noteBoost}`,
+            `cocktail bars San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+            `live music San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
           ],
     },
   ];
@@ -430,32 +547,29 @@ const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
   const includeTreat = signals.kidFriendly || signals.wantsIceCream;
   const treatSlot: SlotTemplate = {
     id: "treat",
-    startAt: addMinutes(t0, gapMin * 3), // inserted after lunch in half-day; after lunch in full-day we’ll adjust order below
+    startAt: addMinutes(t0, gapMin * 3),
     title: signals.wantsIceCream ? "Ice cream / treat stop" : "Treat stop",
     category: "relax",
     requireOpenNow: false,
     queries: signals.wantsIceCream
       ? [
-          `best ice cream San Antonio ${localFlavor} ${noteBoost}`,
-          `gelato San Antonio ${hiddenGem} ${noteBoost}`,
+          `best ice cream San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
+          `gelato San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
         ]
       : [
-          `dessert San Antonio ${localFlavor} ${noteBoost}`,
-          `ice cream San Antonio ${hiddenGem} ${noteBoost}`,
+          `dessert San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
+          `ice cream San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
         ],
   };
 
   if (p.duration === "half_day") {
     if (includeTreat) {
-      // Insert treat after lunch (end)
       return [...baseHalfDay, { ...treatSlot, startAt: addMinutes(t0, gapMin * 3) }];
     }
     return baseHalfDay;
   }
 
-  // full_day
   if (includeTreat) {
-    // Insert treat right after lunch, then push other blocks down by one slot gap
     const out: SlotTemplate[] = [];
     for (const s of baseFullDay) {
       out.push(s);
@@ -463,7 +577,6 @@ const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
         out.push({ ...treatSlot, startAt: addMinutes(t0, gapMin * 3) });
       }
     }
-    // re-time after insertion so order flows
     return out.map((s, idx) => ({ ...s, startAt: addMinutes(t0, gapMin * idx) }));
   }
 
@@ -482,14 +595,38 @@ export async function buildItineraryBlocks(
     Pick<ItineraryBlock, "id" | "timeLabel" | "title" | "category" | "primary" | "alternates">
   > = [];
 
-  // Keep quality high, but not “only mega famous”
   const minRating = prefs.budget === "$$$$" ? 4.4 : 4.2;
   const now = nowUtc();
+
+  // Distance-aware grouping: prefer the next stop to be close to the last chosen stop.
+  let lastCoord: { lat: number; lng: number } | null = null;
+
+  function preferredRadiusKm(): number {
+    switch (prefs.transport) {
+      case "walk":
+        return 3;
+      case "bike":
+        return 8;
+      case "drive":
+        return 25;
+    }
+  }
+
+  function distancePenaltyFactor(): number {
+    // Score is ~45-55 for top places; make distance meaningful but not dominant.
+    switch (prefs.transport) {
+      case "walk":
+        return 2.8;
+      case "bike":
+        return 1.8;
+      case "drive":
+        return 0.9;
+    }
+  }
 
   for (const s of slots) {
     let candidates: PlaceCandidate[] = [];
 
-    // Search across downtown + one outskirts center to increase variety
     const biases = pickBiases(prefs, s.id);
 
     for (const q of s.queries) {
@@ -508,12 +645,11 @@ export async function buildItineraryBlocks(
 
     candidates = varietyRotate(candidates, prefs, s.id);
 
-    // If near-term, prefer open places.
     const requireOpen = s.requireOpenNow && isSoon(now, s.startAt);
     const openFiltered = requireOpen ? candidates.filter((p) => p.openNow === true) : candidates;
     let pool = openFiltered.length >= 3 ? openFiltered : candidates;
 
-    // Type diversity: avoid repeating same primary type across blocks
+    // Type diversity
     const diverse = pool.filter((p) => {
       const k = typeKey(p);
       if (!k) return true;
@@ -521,15 +657,42 @@ export async function buildItineraryBlocks(
     });
     if (diverse.length >= 3) pool = diverse;
 
-    // Choose primary avoiding already-used placeIds
+    // ✅ Distance-aware re-rank
+    // ✅ Distance-aware re-rank
+if (lastCoord) {
+  const from = lastCoord; // ✅ capture to satisfy TS narrowing inside callback
+  const prefKm = preferredRadiusKm();
+  const factor = distancePenaltyFactor();
+
+  pool = [...pool].sort((a, b) => {
+    const aHas = typeof a.lat === "number" && typeof a.lng === "number";
+    const bHas = typeof b.lat === "number" && typeof b.lng === "number";
+
+    const aDist = aHas ? distanceKm(from, { lat: a.lat!, lng: a.lng! }) : prefKm;
+    const bDist = bHas ? distanceKm(from, { lat: b.lat!, lng: b.lng! }) : prefKm;
+
+    const aAdj = a.score - factor * Math.max(0, aDist - 0.5);
+    const bAdj = b.score - factor * Math.max(0, bDist - 0.5);
+
+    const aTooFar = aDist > prefKm;
+    const bTooFar = bDist > prefKm;
+    if (aTooFar !== bTooFar) return aTooFar ? 1 : -1;
+
+    return bAdj - aAdj;
+  });
+}
+
     const primary = pickPrimaryAvoidingUsed(pool, usedPlaceIds);
     if (primary) {
       usedPlaceIds.add(primary.placeId);
       const k = typeKey(primary);
       if (k) usedTypeKeys.add(k);
+
+      if (typeof primary.lat === "number" && typeof primary.lng === "number") {
+        lastCoord = { lat: primary.lat, lng: primary.lng };
+      }
     }
 
-    // Alternates: prefer unused + also avoid repeats if possible
     const alternates = pool
       .filter((p) => (primary ? p.placeId !== primary.placeId : true))
       .filter((p) => !usedPlaceIds.has(p.placeId))

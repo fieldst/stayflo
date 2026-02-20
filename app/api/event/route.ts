@@ -1,33 +1,42 @@
 import { NextResponse } from "next/server";
 import { getSupabase } from "@/lib/supabase";
 
-export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const propertySlug = String(body?.propertySlug || "");
-    const eventName = String(body?.eventName || "");
-    const metadata = body?.metadata ?? {};
+export const runtime = "nodejs";
 
+export async function POST(req: Request) {
+  // Analytics must NEVER break UX. This endpoint should always succeed.
+  try {
+    const body = await req.json().catch(() => ({} as any));
+    const propertySlug = String((body as any)?.propertySlug || "");
+    const eventName = String((body as any)?.eventName || "");
+    const metadata = (body as any)?.metadata ?? {};
+
+    // If payload is malformed, just no-op successfully.
     if (!propertySlug || !eventName) {
-      return NextResponse.json({ ok: false, error: "Missing propertySlug or eventName" }, { status: 400 });
+      return NextResponse.json({ ok: true, stored: false }, { status: 200 });
     }
 
     const supabase = getSupabase();
+
+    // If env isn't configured, safely no-op.
     if (!supabase) {
-      // No env configured yet — safely no-op.
-      return NextResponse.json({ ok: true, stored: false });
+      return NextResponse.json({ ok: true, stored: false }, { status: 200 });
     }
 
-    // NOTE: We'll wire property_id once your properties table is created.
-    // For now, store slug in metadata to keep it simple.
+    // Best-effort insert; swallow any failures (missing table, RLS, etc.)
     const { error } = await supabase.from("events").insert({
       event_name: eventName,
       metadata: { propertySlug, ...metadata },
     });
 
-    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-    return NextResponse.json({ ok: true, stored: true });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || "Unknown error" }, { status: 500 });
+    if (error) {
+      // Do NOT return 500. Telemetry is optional.
+      return NextResponse.json({ ok: true, stored: false }, { status: 200 });
+    }
+
+    return NextResponse.json({ ok: true, stored: true }, { status: 200 });
+  } catch {
+    // Do NOT return 500. Telemetry is optional.
+    return NextResponse.json({ ok: true, stored: false }, { status: 200 });
   }
 }

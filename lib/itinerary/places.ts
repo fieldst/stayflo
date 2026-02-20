@@ -2,12 +2,17 @@ import type { PlaceCandidate } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
 type PlacesSearchTextResponse = {
   places?: Array<{
     id?: string;
     displayName?: { text?: string };
     formattedAddress?: string;
     googleMapsUri?: string;
+    location?: { latitude?: number; longitude?: number };
     rating?: number;
     userRatingCount?: number;
     priceLevel?: string; // PRICE_LEVEL_*
@@ -15,7 +20,6 @@ type PlacesSearchTextResponse = {
     photos?: Array<{ name?: string }>;
     currentOpeningHours?: { openNow?: boolean; weekdayDescriptions?: string[] };
     regularOpeningHours?: { weekdayDescriptions?: string[] };
-
   }>;
 };
 
@@ -65,8 +69,6 @@ export type SearchTextParams = {
   maxResults?: number;
 };
 
-
-
 export async function searchPlacesText(
   params: SearchTextParams
 ): Promise<PlaceCandidate[]> {
@@ -75,31 +77,30 @@ export async function searchPlacesText(
 
   const maxResults = Math.min(Math.max(params.maxResults ?? 10, 1), 20);
 
-  const body: any = {
+  const body: Record<string, unknown> = {
     textQuery: params.textQuery,
     maxResultCount: maxResults,
   };
 
   if (params.locationBias) {
-  const radius = clamp(params.locationBias.radiusMeters, 0, 50_000);
-
-  body.locationBias = {
-    circle: {
-      center: {
-        latitude: params.locationBias.lat,
-        longitude: params.locationBias.lng,
+    const radius = clamp(params.locationBias.radiusMeters, 0, 50_000);
+    body.locationBias = {
+      circle: {
+        center: {
+          latitude: params.locationBias.lat,
+          longitude: params.locationBias.lng,
+        },
+        radius,
       },
-      radius,
-    },
-  };
-}
-
+    };
+  }
 
   const fieldMask = [
     "places.id",
     "places.displayName",
     "places.formattedAddress",
     "places.googleMapsUri",
+    "places.location",
     "places.rating",
     "places.userRatingCount",
     "places.priceLevel",
@@ -107,7 +108,6 @@ export async function searchPlacesText(
     "places.photos",
     "places.currentOpeningHours",
     "places.regularOpeningHours",
-
   ].join(",");
 
   const res = await fetchWithTimeout(
@@ -123,11 +123,6 @@ export async function searchPlacesText(
     }
   );
 
-  function clamp(n: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, n));
-}
-
-
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(
@@ -142,49 +137,53 @@ export async function searchPlacesText(
   const raw = Array.isArray(json.places) ? json.places : [];
 
   const out = raw
-  .map((p): PlaceCandidate | null => {
-    const placeId = String(p.id || "");
-    const name = p.displayName?.text ? String(p.displayName.text) : "";
-    if (!placeId || !name) return null;
+    .map((p): PlaceCandidate | null => {
+      const placeId = String(p.id || "");
+      const name = p.displayName?.text ? String(p.displayName.text) : "";
+      if (!placeId || !name) return null;
 
-    const rating = typeof p.rating === "number" ? p.rating : undefined;
-    const userRatingsTotal =
-      typeof p.userRatingCount === "number" ? p.userRatingCount : undefined;
-    const score = scorePlace(rating, userRatingsTotal);
+      const rating = typeof p.rating === "number" ? p.rating : undefined;
+      const userRatingsTotal =
+        typeof p.userRatingCount === "number" ? p.userRatingCount : undefined;
+      const score = scorePlace(rating, userRatingsTotal);
 
-    const photoRef = p.photos?.[0]?.name ? String(p.photos[0].name) : undefined;
+      const photoRef = p.photos?.[0]?.name ? String(p.photos[0].name) : undefined;
 
-    const openNow =
-      typeof p.currentOpeningHours?.openNow === "boolean"
-        ? p.currentOpeningHours.openNow
-        : undefined;
+      const openNow =
+        typeof p.currentOpeningHours?.openNow === "boolean"
+          ? p.currentOpeningHours.openNow
+          : undefined;
 
-    const weekdayDescriptions =
-      Array.isArray(p.currentOpeningHours?.weekdayDescriptions)
-        ? p.currentOpeningHours.weekdayDescriptions.map(String)
-        : Array.isArray(p.regularOpeningHours?.weekdayDescriptions)
-        ? p.regularOpeningHours.weekdayDescriptions.map(String)
-        : undefined;
+      const weekdayDescriptions =
+        Array.isArray(p.currentOpeningHours?.weekdayDescriptions)
+          ? p.currentOpeningHours.weekdayDescriptions.map(String)
+          : Array.isArray(p.regularOpeningHours?.weekdayDescriptions)
+            ? p.regularOpeningHours.weekdayDescriptions.map(String)
+            : undefined;
 
-    return {
-      placeId,
-      name,
-      address: p.formattedAddress ? String(p.formattedAddress) : undefined,
-      googleMapsUri: p.googleMapsUri ? String(p.googleMapsUri) : undefined,
-      rating,
-      userRatingsTotal,
-      priceLevel: priceLevelToNumber(p.priceLevel),
-      types: Array.isArray(p.types) ? p.types.map(String) : undefined,
-      photoRef,
-      score,
-      openNow,
-      weekdayDescriptions,
-    };
-  })
-  .filter((x): x is PlaceCandidate => x !== null);
-
+      return {
+        placeId,
+        name,
+        address: p.formattedAddress ? String(p.formattedAddress) : undefined,
+        googleMapsUri: p.googleMapsUri ? String(p.googleMapsUri) : undefined,
+        lat:
+          typeof p.location?.latitude === "number" ? p.location.latitude : undefined,
+        lng:
+          typeof p.location?.longitude === "number" ? p.location.longitude : undefined,
+        rating,
+        userRatingsTotal,
+        priceLevel: priceLevelToNumber(p.priceLevel),
+        types: Array.isArray(p.types) ? p.types.map(String) : undefined,
+        photoRef,
+        score,
+        openNow,
+        weekdayDescriptions,
+      };
+    })
+    .filter((x): x is PlaceCandidate => x !== null);
 
   const minRating = typeof params.minRating === "number" ? params.minRating : 0;
+
   return out
     .filter((p) => (typeof p.rating === "number" ? p.rating >= minRating : false))
     .sort((a, b) => b.score - a.score);

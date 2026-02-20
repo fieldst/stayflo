@@ -65,7 +65,7 @@ export default function ItineraryWizard() {
   const [budget, setBudget] = useState<string>(""); // required
   const [vibes, setVibes] = useState<Vibe[]>(["Foodie", "Local Gems"]);
   const [notes, setNotes] = useState<string>("");
-  const [planDay, setPlanDay] = useState<"today" | "tomorrow">("today");
+  const [planDay, setPlanDay] = useState<"today" | "tomorrow" | "now">("today");
 
   const canGenerate = useMemo(
     () => Boolean(cfg && budget && vibes.length > 0),
@@ -204,7 +204,7 @@ export default function ItineraryWizard() {
   <div className="mt-2">
     <select
   value={planDay}
-  onChange={(e) => setPlanDay(e.target.value as "today" | "tomorrow")}
+  onChange={(e) => setPlanDay(e.target.value as "today" | "tomorrow" | "now")}
   className="w-full rounded-xl bg-white/5 px-4 py-3 text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-white/20"
 >
   <option value="today" className="text-black">
@@ -212,6 +212,9 @@ export default function ItineraryWizard() {
   </option>
   <option value="tomorrow" className="text-black">
     Tomorrow (start in the morning)
+  </option>
+  <option value="now" className="text-black">
+    Right now (surprise me)
   </option>
 </select>
 

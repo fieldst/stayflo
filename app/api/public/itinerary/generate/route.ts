@@ -3,6 +3,7 @@ import { getPropertyConfig } from "@/lib/property";
 import type { ItineraryPrefs, GeneratedItinerary } from "@/lib/itinerary/types";
 import { buildItineraryBlocks } from "@/lib/itinerary/planner";
 import { addAiNarrative } from "@/lib/itinerary/openai";
+import { estimateTravelBetweenPlaceIds } from "@/lib/itinerary/travel";
 
 export const runtime = "nodejs";
 
@@ -18,7 +19,6 @@ type Body = {
   // ✅ new
   planDay?: string;
 };
-
 
 function badRequest(message: string) {
   return NextResponse.json({ ok: false, error: message }, { status: 400 });
@@ -44,8 +44,8 @@ export async function POST(req: Request) {
   const pace = asEnum(body.pace, ["chill", "balanced", "packed"] as const);
   const transport = asEnum(body.transport, ["walk", "drive", "bike"] as const);
   const budget = asEnum(body.budget, ["$", "$$", "$$$", "$$$$"] as const);
-  const planDay = asEnum(body.planDay || "today", ["today", "tomorrow"] as const);
-if (!planDay) return badRequest("Missing or invalid planDay");
+  const planDay = asEnum(body.planDay || "today", ["today", "tomorrow", "now"] as const);
+  if (!planDay) return badRequest("Missing or invalid planDay");
 
   if (!duration || !pace || !transport || !budget) {
     return badRequest("Missing or invalid inputs");
@@ -75,6 +75,39 @@ if (!planDay) return badRequest("Missing or invalid planDay");
       blocks: rawBlocks,
     });
 
+    // ✅ Add travel-time tips between consecutive primary stops (best-effort).
+    const enrichedBlocks = [...ai.blocks];
+    const mode =
+      prefs.transport === "walk" ? "walking" : prefs.transport === "bike" ? "bicycling" : "driving";
+
+    for (let i = 1; i < enrichedBlocks.length; i++) {
+      const prev = enrichedBlocks[i - 1];
+      const cur = enrichedBlocks[i];
+      const prevId = prev?.primary?.placeId;
+      const curId = cur?.primary?.placeId;
+      if (!prevId || !curId) continue;
+
+      try {
+        const est = await estimateTravelBetweenPlaceIds({
+          originPlaceId: prevId,
+          destPlaceId: curId,
+          mode,
+        });
+
+        if (!est) continue;
+
+        const tip = `Travel from last stop: ~${est.durationText}${
+          est.distanceText ? ` (${est.distanceText})` : ""
+        }.`;
+
+        const tips = Array.isArray(cur.tips) ? [...cur.tips] : [];
+        const nextTips = [tip, ...tips.filter((t) => t !== tip)].slice(0, 3);
+        enrichedBlocks[i] = { ...cur, tips: nextTips };
+      } catch {
+        // ignore (best-effort)
+      }
+    }
+
     const out: GeneratedItinerary = {
       version: 1,
       city: prefs.city,
@@ -88,18 +121,20 @@ if (!planDay) return badRequest("Missing or invalid planDay");
         vibes: prefs.vibes,
         notes: prefs.notes,
         planDay: prefs.planDay,
-
       },
       headline: ai.headline,
       overview: ai.overview,
-      blocks: ai.blocks,
+      blocks: enrichedBlocks,
       generalTips: ai.generalTips,
       disclaimers: ai.disclaimers,
     };
 
     return NextResponse.json({ ok: true, itinerary: out }, { status: 200 });
-  } catch (e: any) {
-    const msg = typeof e?.message === "string" ? e.message : "Failed to generate itinerary";
+  } catch (e: unknown) {
+    const msg =
+      typeof (e as any)?.message === "string"
+        ? (e as any).message
+        : "Failed to generate itinerary";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

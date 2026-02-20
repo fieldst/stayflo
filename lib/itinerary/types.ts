@@ -8,8 +8,8 @@ export type ItineraryPrefs = {
   vibes: string[];
   notes?: string;
 
-  // ✅ NEW: explicitly choose the day
-  planDay: "today" | "tomorrow";
+  // ✅ choose the day
+  planDay: "today" | "tomorrow" | "now";
 };
 
 export type PlaceCandidate = {
@@ -17,6 +17,11 @@ export type PlaceCandidate = {
   name: string;
   address?: string;
   googleMapsUri?: string;
+
+  // ✅ Optional geo for distance-aware grouping
+  lat?: number;
+  lng?: number;
+
   rating?: number;
   userRatingsTotal?: number;
   priceLevel?: number; // 0-4 (Google)
