@@ -257,6 +257,39 @@ function typeKey(p: PlaceCandidate): string {
  * without breaking the radius limits.
  */
 function pickBiases(prefs: ItineraryPrefs, slotId: string): Bias[] {
+  // ✅ If we're in public concierge mode, bias around the user's location
+  if (prefs.origin) {
+    const { lat, lng } = prefs.origin;
+
+    // Keep within Places API radius limit (<= 50,000)
+    const base: Bias = { key: "origin", lat, lng, radiusMeters: 50_000 };
+
+    // Add a small “secondary” bias a bit away to increase variety (still same radius)
+    const seed = hashString(
+      `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(
+        ","
+      )}|${prefs.notes || ""}|${new Date().toISOString().slice(0, 13)}`
+    );
+
+    const offsets = [
+      { dLat: 0.08, dLng: 0.0 },
+      { dLat: -0.08, dLng: 0.0 },
+      { dLat: 0.0, dLng: 0.08 },
+      { dLat: 0.0, dLng: -0.08 },
+    ];
+
+    const pick = offsets[seed % offsets.length];
+    const secondary: Bias = {
+      key: "origin_secondary",
+      lat: lat + pick.dLat,
+      lng: lng + pick.dLng,
+      radiusMeters: 50_000,
+    };
+
+    return [base, secondary];
+  }
+
+  // ✅ Default (property mode): your existing ${cityQ} multi-bias logic
   const seed = hashString(
     `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(
       ","
@@ -265,7 +298,7 @@ function pickBiases(prefs: ItineraryPrefs, slotId: string): Bias[] {
 
   const outskirts = BIASES.filter((b) => b.key !== "downtown");
   const rotated = rotate(outskirts, seed % outskirts.length);
-  return [BIASES[0], rotated[0]]; // downtown + 1 outskirts
+  return [BIASES[0], rotated[0]];
 }
 
 /**
@@ -287,6 +320,7 @@ function varietyRotate(
 }
 
 function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
+  const cityQ = p.city && p.city !== "Near you" ? p.city : "near me";
   const budgetHint = budgetToHint(p.budget);
   const signals = extractSignals(p.notes, p.vibes);
   const gapMin = p.pace === "packed" ? 90 : p.pace === "chill" ? 150 : 120;
@@ -326,38 +360,38 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
 
     const quickStartQueries = signalsNow.noCoffee
       ? [
-          `best quick bite San Antonio open now ${budgetHintNow} ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
-          `bakery San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
-          `tacos San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `best quick bite ${cityQ} open now ${budgetHintNow} ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `bakery ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `tacos ${cityQ} open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
         ]
       : [
-          `coffee shop San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
-          `best cafe San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
-          `quick bite San Antonio open now ${budgetHintNow} ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `coffee shop ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `best cafe ${cityQ} open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `quick bite ${cityQ} open now ${budgetHintNow} ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
         ];
 
     const doSomethingQueries = signalsNow.kidFriendly
       ? [
-          `family friendly attraction San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
-          `kids activity San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
-          `ice cream San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `family friendly attraction ${cityQ} open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `kids activity ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `ice cream ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
         ]
       : [
-          `top attraction San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
-          `local gem San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
-          `fun thing to do San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `top attraction ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `local gem ${cityQ} open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `fun thing to do ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
         ];
 
     const wrapUpQueries = signalsNow.wantsIceCream
       ? [
-          `ice cream San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
-          `dessert San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
-          `scenic walk San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `ice cream ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `dessert ${cityQ} open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `scenic walk ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
         ]
       : [
-          `dessert San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
-          `scenic walk San Antonio open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
-          `chill bar San Antonio open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `dessert ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
+          `scenic walk ${cityQ} open now ${localFlavorNow} ${noteBoostNow}${avoidTextNow}`,
+          `chill bar ${cityQ} open now ${hiddenGemNow} ${noteBoostNow}${avoidTextNow}`,
         ];
 
     return [
@@ -405,14 +439,14 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
     const t0 = start;
     const dessertQueries = signals.wantsIceCream
       ? [
-          `ice cream San Antonio open late ${localFlavor} ${noteBoost}${avoidText}`,
-          `gelato San Antonio open late ${hiddenGem} ${noteBoost}${avoidText}`,
-          `late night dessert San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+          `ice cream ${cityQ} open late ${localFlavor} ${noteBoost}${avoidText}`,
+          `gelato ${cityQ} open late ${hiddenGem} ${noteBoost}${avoidText}`,
+          `late night dessert ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
         ]
       : [
-          `late night dessert San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
-          `late night tacos San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
-          `open late food San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+          `late night dessert ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
+          `late night tacos ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
+          `open late food ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
         ];
 
     return [
@@ -432,13 +466,13 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
         requireOpenNow: baseRequireOpenNow,
         queries: signals.kidFriendly
           ? [
-              `evening walk San Antonio scenic ${localFlavor} ${noteBoost}${avoidText}`,
-              `family friendly evening San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+              `evening walk ${cityQ} scenic ${localFlavor} ${noteBoost}${avoidText}`,
+              `family friendly evening ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
             ]
           : [
-              `live music San Antonio tonight ${localFlavor} ${noteBoost}${avoidText}`,
-              `cocktail bar San Antonio open late ${hiddenGem} ${noteBoost}${avoidText}`,
-              `nightlife San Antonio popular ${localFlavor} ${noteBoost}${avoidText}`,
+              `live music ${cityQ} tonight ${localFlavor} ${noteBoost}${avoidText}`,
+              `cocktail bar ${cityQ} open late ${hiddenGem} ${noteBoost}${avoidText}`,
+              `nightlife ${cityQ} popular ${localFlavor} ${noteBoost}${avoidText}`,
             ],
       },
     ];
@@ -449,24 +483,24 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
 
   const morningQueries = signals.noCoffee
     ? [
-        `best breakfast San Antonio ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
-        `breakfast tacos San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
-        `bakery San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+        `best breakfast ${cityQ} ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `breakfast tacos ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
+        `bakery ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
       ]
     : [
-        `best breakfast San Antonio ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
-        `coffee and pastries San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
-        `cafe San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
+        `best breakfast ${cityQ} ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `coffee and pastries ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
+        `cafe ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
       ];
 
   const lunchQueries = signals.wantsBbq
     ? [
-        `best bbq San Antonio brisket ribs ${localFlavor} ${noteBoost}${avoidText}`,
-        `bbq near San Antonio smoked meats ${hiddenGem} ${noteBoost}${avoidText}`,
+        `best bbq ${cityQ} brisket ribs ${localFlavor} ${noteBoost}${avoidText}`,
+        `bbq near ${cityQ} smoked meats ${hiddenGem} ${noteBoost}${avoidText}`,
       ]
     : [
-        `best lunch San Antonio ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
-        `local lunch San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+        `best lunch ${cityQ} ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `local lunch ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
       ];
 
   const baseHalfDay: SlotTemplate[] = [
@@ -485,9 +519,9 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
       category: "attraction",
       requireOpenNow: false,
       queries: [
-        `top attractions San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
-        `things to do San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
-        `best museums San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
+        `top attractions ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
+        `things to do ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
+        `best museums ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
       ],
     },
     {
@@ -509,9 +543,9 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
       category: "shopping",
       requireOpenNow: false,
       queries: [
-        `best neighborhoods to explore San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
-        `boutiques San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
-        `San Antonio market square local ${noteBoost}${avoidText}`,
+        `best neighborhoods to explore ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
+        `boutiques ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
+        `${cityQ} market square local ${noteBoost}${avoidText}`,
       ],
     },
     {
@@ -521,8 +555,8 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
       category: "dinner",
       requireOpenNow: false,
       queries: [
-        `best dinner San Antonio ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
-        `local dinner San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+        `best dinner ${cityQ} ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `local dinner ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
       ],
     },
     {
@@ -533,12 +567,12 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
       requireOpenNow: false,
       queries: signals.kidFriendly
         ? [
-            `evening walk San Antonio scenic ${localFlavor} ${noteBoost}${avoidText}`,
-            `family friendly evening San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+            `evening walk ${cityQ} scenic ${localFlavor} ${noteBoost}${avoidText}`,
+            `family friendly evening ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
           ]
         : [
-            `cocktail bars San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
-            `live music San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
+            `cocktail bars ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
+            `live music ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
           ],
     },
   ];
@@ -553,12 +587,12 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
     requireOpenNow: false,
     queries: signals.wantsIceCream
       ? [
-          `best ice cream San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
-          `gelato San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+          `best ice cream ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
+          `gelato ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
         ]
       : [
-          `dessert San Antonio ${localFlavor} ${noteBoost}${avoidText}`,
-          `ice cream San Antonio ${hiddenGem} ${noteBoost}${avoidText}`,
+          `dessert ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
+          `ice cream ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
         ],
   };
 

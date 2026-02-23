@@ -8,7 +8,12 @@ import { estimateTravelBetweenPlaceIds } from "@/lib/itinerary/travel";
 export const runtime = "nodejs";
 
 type Body = {
-  property: string;
+  property?: string;
+
+  // ✅ public concierge mode
+  lat?: number;
+  lng?: number;
+
   duration: string;
   pace: string;
   transport: string;
@@ -16,7 +21,6 @@ type Body = {
   vibes: string[];
   notes?: string;
 
-  // ✅ new
   planDay?: string;
 };
 
@@ -36,9 +40,32 @@ export async function POST(req: Request) {
     return badRequest("Invalid JSON");
   }
 
-  const propertySlug = String(body.property || "");
+ const propertySlug = body.property ? String(body.property) : "";
+const lat = typeof body.lat === "number" ? body.lat : null;
+const lng = typeof body.lng === "number" ? body.lng : null;
+
+let cityLabel = "Near you";
+let propertyForPrefs = "public";
+
+// If property is provided, keep existing behavior
+if (propertySlug) {
   const cfg = getPropertyConfig(propertySlug);
   if (!cfg) return badRequest("Unknown property");
+
+  cityLabel = `${cfg.city}, TX`;
+  propertyForPrefs = cfg.slug;
+}
+
+// If coordinates are provided, treat as public concierge mode
+if (lat !== null && lng !== null) {
+  cityLabel = "Near you";
+  propertyForPrefs = "public";
+}
+
+// Require either property OR coordinates
+if (!propertySlug && (lat === null || lng === null)) {
+  return badRequest("Missing location. Provide property or lat/lng.");
+}
 
   const duration = asEnum(body.duration, ["half_day", "full_day", "two_days"] as const);
   const pace = asEnum(body.pace, ["chill", "balanced", "packed"] as const);
@@ -55,16 +82,17 @@ export async function POST(req: Request) {
   if (!vibes.length) return badRequest("Pick at least one vibe");
 
   const prefs: ItineraryPrefs = {
-    propertySlug: cfg.slug,
-    city: `${cfg.city}, TX`,
-    duration,
-    pace,
-    transport,
-    budget,
-    vibes,
-    notes: body.notes ? String(body.notes).slice(0, 280) : undefined,
-    planDay,
-  };
+  propertySlug: propertyForPrefs,
+  city: cityLabel,
+  duration,
+  pace,
+  transport,
+  budget,
+  vibes,
+  notes: body.notes ? String(body.notes).slice(0, 280) : undefined,
+  planDay,
+  origin: lat !== null && lng !== null ? { lat, lng } : undefined,
+};
 
   try {
     const rawBlocks = await buildItineraryBlocks(prefs);

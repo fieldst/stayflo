@@ -1,6 +1,8 @@
 export type ItineraryPrefs = {
   propertySlug: string;
   city: string; // e.g., "San Antonio, TX"
+    // ✅ Optional: public concierge mode uses the user's location
+  origin?: { lat: number; lng: number };
   duration: "half_day" | "full_day" | "two_days";
   pace: "chill" | "balanced" | "packed";
   transport: "walk" | "drive" | "bike";
