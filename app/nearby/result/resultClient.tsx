@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { trackEvent } from "@/lib/events";
@@ -62,13 +61,14 @@ function pickNextSwap(args: {
 export default function NearbyResultClient() {
   const sp = useSearchParams();
 
-  const prefs = useMemo(() => {
+    const prefs = useMemo(() => {
     const duration = sp.get("duration") || "full_day";
     const pace = sp.get("pace") || "balanced";
     const transport = sp.get("transport") || "drive";
     const budget = sp.get("budget") || "$$";
     const vibes = (sp.get("vibes") || "Foodie").split(",").filter(Boolean);
     const notes = sp.get("notes") || "";
+    const startTime = sp.get("startTime") || "";
 
     const planDayParam = sp.get("planDay");
     const planDay: "today" | "tomorrow" | "now" =
@@ -77,7 +77,7 @@ export default function NearbyResultClient() {
     const lat = Number(sp.get("lat"));
     const lng = Number(sp.get("lng"));
 
-    return { duration, pace, transport, budget, vibes, notes, planDay, lat, lng };
+    return { duration, pace, transport, budget, vibes, notes, planDay, startTime, lat, lng };
   }, [sp]);
 
   const hasCoords = Number.isFinite(prefs.lat) && Number.isFinite(prefs.lng);
@@ -137,6 +137,7 @@ export default function NearbyResultClient() {
             vibes: prefs.vibes,
             notes: prefs.notes,
             planDay: prefs.planDay,
+            startTime: prefs.planDay === "now" ? undefined : prefs.startTime || undefined,
           }),
         });
 

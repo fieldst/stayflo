@@ -1,5 +1,5 @@
 "use client";
-
+import { useEffect } from "react";
 import { useMemo, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
@@ -52,6 +52,13 @@ const BUDGET = [
   { value: "$$$$", label: "Splurge" },
 ] as const;
 
+const TIME_OPTIONS = [
+  "06:00","06:30","07:00","07:30","08:00","08:30","09:00","09:30","10:00","10:30",
+  "11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30",
+  "16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00","20:30",
+  "21:00"
+] as const;
+
 export default function ItineraryWizard() {
   const router = useRouter();
   const params = useParams();
@@ -66,11 +73,23 @@ export default function ItineraryWizard() {
   const [vibes, setVibes] = useState<Vibe[]>(["Foodie", "Local Gems"]);
   const [notes, setNotes] = useState<string>("");
   const [planDay, setPlanDay] = useState<"today" | "tomorrow" | "now">("today");
+  const [startTime, setStartTime] = useState<string>("09:00");
 
   const canGenerate = useMemo(
     () => Boolean(cfg && budget && vibes.length > 0),
     [cfg, budget, vibes.length]
   );
+
+  useEffect(() => {
+  if (planDay === "tomorrow") {
+    setStartTime("09:00");
+  } else if (planDay === "today") {
+    setStartTime((prev) => prev || "09:00");
+  } else {
+    // "now" mode ignores start time
+    setStartTime("09:00");
+  }
+}, [planDay]);
 
   function toggleVibe(v: Vibe) {
     setVibes((prev) => (prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]));
@@ -93,6 +112,9 @@ export default function ItineraryWizard() {
     qs.set("transport", transport);
     qs.set("budget", budget);
     qs.set("planDay", planDay);
+    if (planDay !== "now") {
+      qs.set("startTime", startTime);
+    }
     qs.set("vibes", vibes.join(","));
     if (notes.trim()) qs.set("notes", notes.trim());
 
@@ -220,6 +242,33 @@ export default function ItineraryWizard() {
 
     <div className="mt-2 text-xs text-white/60">
       If it’s late, “Today” will focus on open-now night options.
+    </div>
+  </div>
+</div>
+
+<div className="mt-6">
+  <div className="text-sm font-medium text-white/80">Start time</div>
+  <div className="mt-2">
+    <select
+      value={startTime}
+      onChange={(e) => setStartTime(e.target.value)}
+      disabled={planDay === "now"}
+      className={[
+        "w-full rounded-xl bg-white/5 px-4 py-3 text-white ring-1 ring-white/10 outline-none focus:ring-2 focus:ring-white/20",
+        planDay === "now" ? "opacity-50 cursor-not-allowed" : "",
+      ].join(" ")}
+    >
+      {TIME_OPTIONS.map((t) => (
+        <option key={t} value={t} className="text-black">
+          {t}
+        </option>
+      ))}
+    </select>
+
+    <div className="mt-2 text-xs text-white/60">
+      {planDay === "now"
+        ? "Disabled for “Right now” mode."
+        : "Pick when you want the itinerary to begin (Central Time)."}
     </div>
   </div>
 </div>

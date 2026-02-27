@@ -9,7 +9,12 @@ export type ItineraryPrefs = {
   budget: "$" | "$$" | "$$$" | "$$$$";
   vibes: string[];
   notes?: string;
-
+    /**
+   * Optional start time (local to the city’s timezone).
+   * Use 24h "HH:MM" (recommended), e.g. "16:00".
+   * We keep it optional so existing flows don’t break.
+   */
+  startTime?: string;
   // ✅ choose the day
   planDay: "today" | "tomorrow" | "now";
 };

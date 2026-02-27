@@ -22,6 +22,7 @@ type Body = {
   notes?: string;
 
   planDay?: string;
+  startTime?: string;
 };
 
 function badRequest(message: string) {
@@ -73,7 +74,13 @@ if (!propertySlug && (lat === null || lng === null)) {
   const budget = asEnum(body.budget, ["$", "$$", "$$$", "$$$$"] as const);
   const planDay = asEnum(body.planDay || "today", ["today", "tomorrow", "now"] as const);
   if (!planDay) return badRequest("Missing or invalid planDay");
-
+  const startTimeRaw = typeof body.startTime === "string" ? body.startTime.trim() : "";
+  const startTime =
+  startTimeRaw && /^([01]?\d|2[0-3]):([0-5]\d)$/.test(startTimeRaw) ? startTimeRaw : undefined;
+  if (body.startTime && !startTime) return badRequest("Invalid startTime (expected HH:MM)");
+  if (planDay === "now") {
+  // In "right now" mode, we ignore any provided start time.
+}
   if (!duration || !pace || !transport || !budget) {
     return badRequest("Missing or invalid inputs");
   }
@@ -91,6 +98,7 @@ if (!propertySlug && (lat === null || lng === null)) {
   vibes,
   notes: body.notes ? String(body.notes).slice(0, 280) : undefined,
   planDay,
+  startTime: planDay === "now" ? undefined : startTime,
   origin: lat !== null && lng !== null ? { lat, lng } : undefined,
 };
 
@@ -149,6 +157,7 @@ if (!propertySlug && (lat === null || lng === null)) {
         vibes: prefs.vibes,
         notes: prefs.notes,
         planDay: prefs.planDay,
+        startTime: prefs.startTime,
       },
       headline: ai.headline,
       overview: ai.overview,

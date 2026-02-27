@@ -4,6 +4,85 @@ import { distanceKm } from "./travel";
 
 const TZ = "America/Chicago";
 
+type YMD = { year: number; month: number; day: number };
+
+function getPartsInTz(d: Date): { year: number; month: number; day: number; hour: number; minute: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+
+  const get = (t: string) => parts.find((p) => p.type === t)?.value;
+  const year = parseInt(get("year") || "1970", 10);
+  const month = parseInt(get("month") || "01", 10);
+  const day = parseInt(get("day") || "01", 10);
+  const hour = parseInt(get("hour") || "00", 10);
+  const minute = parseInt(get("minute") || "00", 10);
+  return { year, month, day, hour, minute };
+}
+
+function getLocalYmdInTz(d: Date): YMD {
+  const p = getPartsInTz(d);
+  return { year: p.year, month: p.month, day: p.day };
+}
+
+function addLocalDays(base: YMD, days: number): YMD {
+  // Use a UTC noon anchor so DST edges are less likely to bite.
+  const anchor = new Date(Date.UTC(base.year, base.month - 1, base.day, 12, 0, 0));
+  const shifted = new Date(anchor.getTime() + days * 24 * 60 * 60_000);
+  return getLocalYmdInTz(shifted);
+}
+
+function zonedTimeToUtc(args: { ymd: YMD; hour: number; minute: number }): Date {
+  const { ymd, hour, minute } = args;
+
+  // Initial guess: treat the provided local time as if it were UTC.
+  const guess = new Date(Date.UTC(ymd.year, ymd.month - 1, ymd.day, hour, minute, 0));
+  // What local time does that guess actually map to in our TZ?
+  const rendered = getPartsInTz(guess);
+
+  const renderedMs = Date.UTC(rendered.year, rendered.month - 1, rendered.day, rendered.hour, rendered.minute, 0);
+  const targetMs = Date.UTC(ymd.year, ymd.month - 1, ymd.day, hour, minute, 0);
+
+  // Adjust guess back by the difference between what we rendered and what we wanted.
+  const diffMs = renderedMs - targetMs;
+  return new Date(guess.getTime() - diffMs);
+}
+
+function parseStartTimeHHMM(s: string | undefined): { hour: number; minute: number } | null {
+  const raw = (s || "").trim();
+  if (!raw) return null;
+  const m = raw.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!m) return null;
+  const hour = parseInt(m[1], 10);
+  const minute = parseInt(m[2], 10);
+  return { hour, minute };
+}
+
+function resolveStartUtc(p: ItineraryPrefs): Date {
+  const now = nowUtc();
+  if (p.planDay === "now") return now;
+
+  const ymdToday = getLocalYmdInTz(now);
+  const ymd = p.planDay === "tomorrow" ? addLocalDays(ymdToday, 1) : ymdToday;
+
+  const parsed = parseStartTimeHHMM(p.startTime);
+  if (!parsed) {
+    // Keep existing behavior if no explicit start time was provided
+    return p.planDay === "tomorrow" ? zonedTimeToUtc({ ymd, hour: 9, minute: 0 }) : now;
+  }
+
+  const chosen = zonedTimeToUtc({ ymd, hour: parsed.hour, minute: parsed.minute });
+  // If "today" + chosen is in the past, clamp to now so labels don't start behind the user.
+  if (p.planDay === "today" && chosen.getTime() < now.getTime()) return now;
+  return chosen;
+}
+
 /**
  * We stay within the Places API limit:
  * circle.radius must be <= 50,000
@@ -79,22 +158,115 @@ type NoteSignals = {
   wantsBbq: boolean;
   wantsIceCream: boolean;
   kidFriendly: boolean;
+
+  // Structured intent
+  cuisines: string[];
+  nightlife: string[];
+  activities: string[];
   includeKeywords: string[];
   avoidKeywords: string[];
   areaHints: string[];
 };
+
+const CUISINE_TERMS = [
+  "bbq",
+  "barbecue",
+  "brisket",
+  "ribs",
+  "mediterranean",
+  "greek",
+  "turkish",
+  "lebanese",
+  "middle eastern",
+  "mexican",
+  "tex mex",
+  "tacos",
+  "italian",
+  "pizza",
+  "sushi",
+  "japanese",
+  "ramen",
+  "korean",
+  "thai",
+  "vietnamese",
+  "pho",
+  "indian",
+  "pakistani",
+  "caribbean",
+  "cuban",
+  "seafood",
+  "steakhouse",
+  "vegan",
+  "vegetarian",
+  "gluten free",
+  "halal",
+] as const;
+
+const NIGHTLIFE_TERMS = [
+  "speakeasy",
+  "cocktail",
+  "cocktail bar",
+  "rooftop",
+  "rooftop bar",
+  "brewery",
+  "taproom",
+  "wine bar",
+  "sports bar",
+  "dive bar",
+  "live music",
+  "jazz",
+  "karaoke",
+] as const;
+
+const ACTIVITY_TERMS = [
+  "museum",
+  "art",
+  "history",
+  "market",
+  "farmers market",
+  "shopping",
+  "boutiques",
+  "hike",
+  "trail",
+  "river walk",
+  "scenic",
+] as const;
+
+function uniqLimit(arr: string[], n: number) {
+  return Array.from(new Set(arr)).slice(0, n);
+}
+
+function extractPhrases(notes: string): string[] {
+  // Keep simple: build 2-word phrases (bigrams) from the notes.
+  const words = notes.split(" ").filter(Boolean);
+  const phrases: string[] = [];
+  for (let i = 0; i < words.length - 1; i++) {
+    const a = words[i];
+    const b = words[i + 1];
+    if (!a || !b) continue;
+    if (a.length < 3 || b.length < 3) continue;
+    phrases.push(`${a} ${b}`);
+  }
+  return phrases;
+}
+
+function matchTerms(text: string, terms: readonly string[]): string[] {
+  const hits: string[] = [];
+  for (const t of terms) {
+    const re = new RegExp(`\\b${t.replace(/\s+/g, "\\s+")}\\b`, "i");
+    if (re.test(text)) hits.push(t.toLowerCase());
+  }
+  return hits;
+}
 
 function extractSignals(notesRaw: string | undefined, vibes: string[]): NoteSignals {
   const notes = normalize(notesRaw || "");
   const vibeText = normalize(vibes.join(" "));
 
   const noCoffee =
-    /\b(no coffee|dont like coffee|don't like coffee|hate coffee|avoid coffee|no caffeine)\b/.test(
-      notes
-    );
+    /\b(no coffee|dont like coffee|don't like coffee|hate coffee|avoid coffee|no caffeine)\b/.test(notes);
 
-  const wantsBbq =
-    /\b(bbq|barbecue|brisket|ribs|smoked)\b/.test(notes) || /\bbbq\b/.test(vibeText);
+  const wantsBbq = /\b(bbq|barbecue|brisket|ribs|smoked)\b/.test(notes) || /\bbbq\b/.test(vibeText);
 
   const wantsIceCream = /\b(ice cream|gelato|frozen custard|milkshake)\b/.test(notes);
 
@@ -103,14 +275,12 @@ function extractSignals(notesRaw: string | undefined, vibes: string[]): NoteSign
 
   // Detect “avoid X” constraints (negative keywords)
   const avoidMatches = Array.from(
-    notes.matchAll(
-      /\b(?:avoid|no|skip|not into|dont want|don't want|do not want)\s+([a-z]{3,18})\b/g
-    )
+    notes.matchAll(/\b(?:avoid|no|skip|not into|dont want|don't want|do not want)\s+([a-z]{3,18})\b/g)
   ).map((m) => m[1]);
 
   const avoidKeywords = Array.from(new Set(avoidMatches)).slice(0, 6);
 
-  // Pull a few useful keywords from notes to steer search (no junk words)
+  // Pull useful keywords + phrases from notes to steer search (dynamic)
   const stop = new Set([
     "i",
     "we",
@@ -142,17 +312,43 @@ function extractSignals(notesRaw: string | undefined, vibes: string[]): NoteSign
     "really",
     "very",
     "not",
+    "into",
+    "something",
+    "anything",
+    "should",
+    "know",
+    "do",
+    "does",
+    "did",
+    "be",
+    "is",
+    "are",
+    "was",
+    "were",
+    "it",
+    "this",
+    "that",
   ]);
 
-  const includeKeywords = Array.from(
-    new Set(
-      notes
-        .split(" ")
-        .filter(Boolean)
-        .filter((w) => w.length >= 4 && w.length <= 18)
-        .filter((w) => !stop.has(w))
-    )
-  ).slice(0, 6);
+  const singleWords = notes
+    .split(" ")
+    .filter(Boolean)
+    .filter((w) => w.length >= 3 && w.length <= 22)
+    .filter((w) => !stop.has(w));
+
+  const phrases = extractPhrases(notes).filter((p) => {
+    const parts = p.split(" ");
+    if (parts.some((w) => stop.has(w))) return false;
+    return p.length >= 7 && p.length <= 30;
+  });
+
+  // Recognize “category” terms explicitly
+  const cuisines = uniqLimit(matchTerms(notes, CUISINE_TERMS), 6);
+  const nightlife = uniqLimit(matchTerms(notes, NIGHTLIFE_TERMS), 5);
+  const activities = uniqLimit(matchTerms(notes, ACTIVITY_TERMS), 5);
+
+  // Include category matches + best words/phrases as boost keywords
+  const includeKeywords = uniqLimit([...cuisines, ...nightlife, ...activities, ...phrases, ...singleWords], 12);
 
   // Area hints (lightweight, prevents overfitting)
   const areaHints: string[] = [];
@@ -174,6 +370,9 @@ function extractSignals(notesRaw: string | undefined, vibes: string[]): NoteSign
     wantsBbq,
     wantsIceCream,
     kidFriendly,
+    cuisines,
+    nightlife,
+    activities,
     includeKeywords,
     avoidKeywords,
     areaHints: areaHints.slice(0, 3),
@@ -228,10 +427,7 @@ function dedupeByPlaceId(items: PlaceCandidate[]): PlaceCandidate[] {
   return out;
 }
 
-function pickPrimaryAvoidingUsed(
-  candidates: PlaceCandidate[],
-  used: Set<string>
-): PlaceCandidate | null {
+function pickPrimaryAvoidingUsed(candidates: PlaceCandidate[], used: Set<string>): PlaceCandidate | null {
   for (const c of candidates) {
     if (!used.has(c.placeId)) return c;
   }
@@ -257,7 +453,7 @@ function typeKey(p: PlaceCandidate): string {
  * without breaking the radius limits.
  */
 function pickBiases(prefs: ItineraryPrefs, slotId: string): Bias[] {
-  // ✅ If we're in public concierge mode, bias around the user's location
+  // If we're in public concierge mode, bias around the user's location
   if (prefs.origin) {
     const { lat, lng } = prefs.origin;
 
@@ -266,9 +462,9 @@ function pickBiases(prefs: ItineraryPrefs, slotId: string): Bias[] {
 
     // Add a small “secondary” bias a bit away to increase variety (still same radius)
     const seed = hashString(
-      `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(
-        ","
-      )}|${prefs.notes || ""}|${new Date().toISOString().slice(0, 13)}`
+      `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(",")}|${
+        prefs.notes || ""
+      }|${new Date().toISOString().slice(0, 13)}`
     );
 
     const offsets = [
@@ -289,11 +485,11 @@ function pickBiases(prefs: ItineraryPrefs, slotId: string): Bias[] {
     return [base, secondary];
   }
 
-  // ✅ Default (property mode): your existing ${cityQ} multi-bias logic
+  // Default (property mode): multi-bias logic
   const seed = hashString(
-    `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(
-      ","
-    )}|${prefs.notes || ""}|${new Date().toISOString().slice(0, 13)}`
+    `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(",")}|${
+      prefs.notes || ""
+    }|${new Date().toISOString().slice(0, 13)}`
   );
 
   const outskirts = BIASES.filter((b) => b.key !== "downtown");
@@ -305,15 +501,11 @@ function pickBiases(prefs: ItineraryPrefs, slotId: string): Bias[] {
  * Rotate candidate list slightly so we don’t always select the same “famous top 1”
  * for generic queries.
  */
-function varietyRotate(
-  candidates: PlaceCandidate[],
-  prefs: ItineraryPrefs,
-  slotId: string
-): PlaceCandidate[] {
+function varietyRotate(candidates: PlaceCandidate[], prefs: ItineraryPrefs, slotId: string): PlaceCandidate[] {
   const seed = hashString(
-    `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(
-      ","
-    )}|${prefs.notes || ""}|${new Date().toISOString().slice(0, 13)}`
+    `${slotId}|${prefs.duration}|${prefs.pace}|${prefs.budget}|${prefs.transport}|${prefs.vibes.join(",")}|${
+      prefs.notes || ""
+    }|${new Date().toISOString().slice(0, 13)}`
   );
   const offset = candidates.length ? seed % Math.min(candidates.length, 6) : 0;
   return rotate(candidates, offset);
@@ -328,34 +520,21 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
   const baseRequireOpenNow = true;
   const hour = chicagoHour(nowUtc());
   const late = hour >= 20; // 8PM+
-    // ✅ RIGHT NOW / SPONTANEOUS MODE
-  // Goal: give them something they can do immediately:
-  // - Open-now only
-  // - Short, punchy plan (2–3 stops)
-  // - Works even if it’s late
-    // ✅ RIGHT NOW / SPONTANEOUS MODE (self-contained)
-  // - Open-now only
-  // - Short, punchy plan (2–3 stops)
-  // - Doesn't depend on vars declared later in the function
+
+  // RIGHT NOW / SPONTANEOUS MODE (self-contained)
   if (p.planDay === "now") {
     const t0 = nowUtc();
 
-    // lightweight versions of the later variables (avoid TDZ errors)
     const budgetHintNow = budgetToHint(p.budget);
     const signalsNow = extractSignals(p.notes, p.vibes);
 
-    const localFlavorNow = signalsNow.kidFriendly
-      ? "family friendly local favorite"
-      : "local favorite";
+    const localFlavorNow = signalsNow.kidFriendly ? "family friendly local favorite" : "local favorite";
     const hiddenGemNow = "hidden gem locals love";
 
     const noteBoostRawNow = [...signalsNow.areaHints, ...signalsNow.includeKeywords].slice(0, 8);
     const noteBoostNow = noteBoostRawNow.length ? `(${noteBoostRawNow.join(", ")})` : "";
-    const avoidTextNow = signalsNow.avoidKeywords.length
-      ? ` -${signalsNow.avoidKeywords.join(" -")}`
-      : "";
+    const avoidTextNow = signalsNow.avoidKeywords.length ? ` -${signalsNow.avoidKeywords.join(" -")}` : "";
 
-    // keep pacing consistent with your app
     const gapMinNow = p.pace === "packed" ? 90 : p.pace === "chill" ? 150 : 120;
 
     const quickStartQueries = signalsNow.noCoffee
@@ -421,11 +600,12 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
       },
     ];
   }
-  // ✅ UI choice wins over notes
+
+  // UI choice wins over notes
   const goTonight = p.planDay === "today" && late;
 
-  // ✅ If user chose tomorrow, always start tomorrow morning
-  const start = p.planDay === "tomorrow" ? tomorrowAt9amUtc(nowUtc()) : nowUtc();
+  // Start time based on planDay + startTime
+  const start = resolveStartUtc(p);
 
   const localFlavor = signals.kidFriendly ? "family friendly local favorite" : "local favorite";
   const hiddenGem = "hidden gem locals love";
@@ -434,7 +614,7 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
   const noteBoost = noteBoostRaw.length ? `(${noteBoostRaw.join(", ")})` : "";
   const avoidText = signals.avoidKeywords.length ? ` -${signals.avoidKeywords.join(" -")}` : "";
 
-  // NIGHT MODE
+  // NIGHT MODE (late today)
   if (goTonight) {
     const t0 = start;
     const dessertQueries = signals.wantsIceCream
@@ -470,6 +650,11 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
               `family friendly evening ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
             ]
           : [
+              ...(signals.nightlife.length
+                ? signals.nightlife
+                    .slice(0, 2)
+                    .map((t) => `${t} ${cityQ} open late ${hiddenGem} ${noteBoost}${avoidText}`)
+                : []),
               `live music ${cityQ} tonight ${localFlavor} ${noteBoost}${avoidText}`,
               `cocktail bar ${cityQ} open late ${hiddenGem} ${noteBoost}${avoidText}`,
               `nightlife ${cityQ} popular ${localFlavor} ${noteBoost}${avoidText}`,
@@ -519,6 +704,7 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
       category: "attraction",
       requireOpenNow: false,
       queries: [
+        ...(signals.activities.length ? signals.activities.slice(0, 2).map((t) => `${t} ${cityQ} ${noteBoost}${avoidText}`) : []),
         `top attractions ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
         `things to do ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
         `best museums ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
@@ -533,6 +719,8 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
       queries: lunchQueries,
     },
   ];
+
+  const cuisineHint = signals.cuisines.length ? signals.cuisines.slice(0, 2).join(" ") : "";
 
   const baseFullDay: SlotTemplate[] = [
     ...baseHalfDay,
@@ -555,8 +743,8 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
       category: "dinner",
       requireOpenNow: false,
       queries: [
-        `best dinner ${cityQ} ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
-        `local dinner ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
+        `best ${cuisineHint ? cuisineHint + " " : ""}dinner ${cityQ} ${budgetHint} ${localFlavor} ${noteBoost}${avoidText}`,
+        `local ${cuisineHint ? cuisineHint + " " : ""}dinner ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
       ],
     },
     {
@@ -571,6 +759,9 @@ function buildSlots(p: ItineraryPrefs): SlotTemplate[] {
             `family friendly evening ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
           ]
         : [
+            ...(signals.nightlife.length
+              ? signals.nightlife.slice(0, 2).map((t) => `${t} ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`)
+              : []),
             `cocktail bars ${cityQ} ${hiddenGem} ${noteBoost}${avoidText}`,
             `live music ${cityQ} ${localFlavor} ${noteBoost}${avoidText}`,
           ],
@@ -625,9 +816,7 @@ export async function buildItineraryBlocks(
   const usedPlaceIds = new Set<string>();
   const usedTypeKeys = new Set<string>();
 
-  const blocks: Array<
-    Pick<ItineraryBlock, "id" | "timeLabel" | "title" | "category" | "primary" | "alternates">
-  > = [];
+  const blocks: Array<Pick<ItineraryBlock, "id" | "timeLabel" | "title" | "category" | "primary" | "alternates">> = [];
 
   const minRating = prefs.budget === "$$$$" ? 4.4 : 4.2;
   const now = nowUtc();
@@ -691,30 +880,29 @@ export async function buildItineraryBlocks(
     });
     if (diverse.length >= 3) pool = diverse;
 
-    // ✅ Distance-aware re-rank
-    // ✅ Distance-aware re-rank
-if (lastCoord) {
-  const from = lastCoord; // ✅ capture to satisfy TS narrowing inside callback
-  const prefKm = preferredRadiusKm();
-  const factor = distancePenaltyFactor();
+    // Distance-aware re-rank
+    if (lastCoord) {
+      const from = lastCoord; // capture to satisfy TS narrowing inside callback
+      const prefKm = preferredRadiusKm();
+      const factor = distancePenaltyFactor();
 
-  pool = [...pool].sort((a, b) => {
-    const aHas = typeof a.lat === "number" && typeof a.lng === "number";
-    const bHas = typeof b.lat === "number" && typeof b.lng === "number";
+      pool = [...pool].sort((a, b) => {
+        const aHas = typeof a.lat === "number" && typeof a.lng === "number";
+        const bHas = typeof b.lat === "number" && typeof b.lng === "number";
 
-    const aDist = aHas ? distanceKm(from, { lat: a.lat!, lng: a.lng! }) : prefKm;
-    const bDist = bHas ? distanceKm(from, { lat: b.lat!, lng: b.lng! }) : prefKm;
+        const aDist = aHas ? distanceKm(from, { lat: a.lat!, lng: a.lng! }) : prefKm;
+        const bDist = bHas ? distanceKm(from, { lat: b.lat!, lng: b.lng! }) : prefKm;
 
-    const aAdj = a.score - factor * Math.max(0, aDist - 0.5);
-    const bAdj = b.score - factor * Math.max(0, bDist - 0.5);
+        const aAdj = a.score - factor * Math.max(0, aDist - 0.5);
+        const bAdj = b.score - factor * Math.max(0, bDist - 0.5);
 
-    const aTooFar = aDist > prefKm;
-    const bTooFar = bDist > prefKm;
-    if (aTooFar !== bTooFar) return aTooFar ? 1 : -1;
+        const aTooFar = aDist > prefKm;
+        const bTooFar = bDist > prefKm;
+        if (aTooFar !== bTooFar) return aTooFar ? 1 : -1;
 
-    return bAdj - aAdj;
-  });
-}
+        return bAdj - aAdj;
+      });
+    }
 
     const primary = pickPrimaryAvoidingUsed(pool, usedPlaceIds);
     if (primary) {
